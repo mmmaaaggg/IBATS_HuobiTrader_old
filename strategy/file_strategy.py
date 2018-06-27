@@ -272,11 +272,14 @@ if __name__ == '__main__':
     }
     # run_mode = RunMode.BackTest
     # 初始化策略处理器
-    stghandler = StgHandlerBase.factory(stg_class_obj=ReadFileStg,
-                                        strategy_params=strategy_params,
-                                        md_agent_params_list=md_agent_params_list,
-                                        **run_mode_realtime_params)
+    stghandler = StgHandlerBase.factory(
+        stg_class_obj=ReadFileStg,
+        strategy_params=strategy_params,
+        md_agent_params_list=md_agent_params_list,
+        **run_mode_realtime_params)
+    # 开始执行策略
     stghandler.start()
+    # 策略执行 2 分钟后关闭
     time.sleep(120)
     stghandler.keep_running = False
     stghandler.join()

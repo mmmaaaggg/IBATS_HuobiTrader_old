@@ -233,12 +233,13 @@ class StgHandlerBase(Thread, ABC):
         建立策略对象
         建立数据库相应记录信息
         根据运行模式（实时、回测）：选择相应的md_agent以及trade_agent
-        :param stg_class_obj: 
-        :param strategy_params: 
-        :param md_agent_params_list: 
-        :param run_mode: 
-        :param run_mode_params: 
-        :return: 
+        :param stg_class_obj: 策略类型 StgBase 的子类
+        :param strategy_params: 策略参数
+        :param md_agent_params_list: 行情代理（md_agent）参数，支持同时订阅多周期、多品种，
+        例如：同时订阅 [ethusdt, eosusdt] 1min 行情、[btcusdt, ethbtc] tick 行情
+        :param run_mode: 运行模式 RunMode.Realtime  或 RunMode.Backtest
+        :param run_mode_params: 运行参数，回测模式下：运行起止时间，实时行情下：加载定时器等设置
+        :return: 策略执行对象实力
         """
         stg_run_info = StgRunInfo(stg_name=stg_class_obj.__name__,  # '{.__name__}'.format(stg_class_obj)
                                   dt_from=datetime.now(),
