@@ -6,16 +6,16 @@ Auto Backtest Analysis Trade Framework （简称ABAT）支持期货、数字货�
 - 框架采用分部署架构，行情推送与主框架可分离部署，通过redis进行数据广播
 - 未来将可以支持股票、期货、数字货币多种接口，同时交易
 
-主要组建：
+主要组件：
 
 - 行情代理 md agent
 - 交易代理 trade agent
-- 行情推送 md feed
+- 行情推送 md feeder
 - 回测及实时行情交易框架 ABAT
 
 当前项目主要用于对数字货币进行自动化交易，策略分析使用。
 
-目前暂未考虑前端展现方面问题。
+由于精力有限，目前暂未实现前端展现。交易自动执行，通过日至可查看交易执行情况。
 
 ## 安装
 
@@ -31,11 +31,12 @@ Redis 3.0.6
 ## 策略运行示例
 
 strategy 目录下
-simple_strategy.py 实现简单均线交叉策略回测\
-file_strategy.py 调仓文件导入式的交易（实时行情）\
+- simple_strategy.py 实现简单均线交叉策略回测\
+- file_strategy.py 调仓文件导入式的交易（实时行情）\
+
 其他策略 coming soon
 
-## 策略开发框架
+## 策略研发框架
 
 执行策略
 
