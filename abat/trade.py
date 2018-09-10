@@ -12,6 +12,7 @@ from abc import abstractmethod, ABC
 from datetime import datetime
 from abat.common import RunMode
 from abat.backend.orm import OrderInfo
+
 logger = logging.getLogger(__package__)
 
 
@@ -81,17 +82,22 @@ class TraderAgent(ABC):
     def datetime_last_send_order_dic(self) -> dict:
         raise NotImplementedError()
 
+    @property
+    @abstractmethod
+    def get_balance(self) -> dict:
+        raise NotImplementedError()
+
 
 trader_agent_class_dic = {RunMode.Backtest: TraderAgent, RunMode.Realtime: TraderAgent}
 
 
-def register_realtime_trader_agent(agent: TraderAgent)->TraderAgent:
+def register_realtime_trader_agent(agent: TraderAgent) -> TraderAgent:
     trader_agent_class_dic[RunMode.Realtime] = agent
     logger.info('设置 realtime trade agent:%s', agent.__class__.__name__)
     return agent
 
 
-def register_backtest_trader_agent(agent: TraderAgent)->TraderAgent:
+def register_backtest_trader_agent(agent: TraderAgent) -> TraderAgent:
     trader_agent_class_dic[RunMode.Backtest] = agent
     logger.info('设置 backtest trade agent:%s', agent.__class__.__name__)
     return agent

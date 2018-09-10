@@ -223,6 +223,39 @@ class StgBase:
     def datetime_last_send_order_dic(self):
         return self.trade_agent.datetime_last_send_order_dic
 
+    def get_balance(self, non_zero_only=True, trade_type_only=True, currency=None, force_refresh=False) -> list:
+        """
+        调用接口 查询 各个币种仓位
+        :param non_zero_only: 只保留非零币种
+        :param trade_type_only: 只保留 trade 类型币种，frozen 类型的不保存
+        :param currency: 只返回制定币种 usdt eth 等
+        :param force_refresh: 强制刷新，默认没30秒允许重新查询一次
+        :return:
+        [{'currency': 'hb10', 'type': 'trade', 'balance': '0'},
+         {'currency': 'hb10', 'type': 'frozen', 'balance': '0'},
+         {'currency': 'usdt', 'type': 'trade', 'balance': '0.000161'},
+         {'currency': 'usdt', 'type': 'frozen', 'balance': '0'},
+         {'currency': 'btc', 'type': 'trade', 'balance': '0'}]
+        """
+        return self.trade_agent.get_balance(non_zero_only, trade_type_only, currency, force_refresh)
+
+    def get_holding_currency(self, force_refresh=False, exclude_usdt=True) -> dict:
+        """
+        非usdt持仓情况dict
+        :param force_refresh:
+        :param exclude_usdt:
+        :return:
+        {
+            'hb10': {'currency': 'hb10', 'type': 'trade', 'balance': '0'},
+            'usdt': {'currency': 'usdt', 'type': 'trade', 'balance': '0.000161'},
+            'btc' : {'currency': 'btc', 'type': 'trade', 'balance': '0'}
+         }
+        """
+        balance_dic_list = self.get_balance(non_zero_only=True, force_refresh=force_refresh)
+        balance_dic = {dic['currency']: dic for dic in balance_dic_list
+                       if dic['type'] == 'trade' and not (exclude_usdt and dic['currency'] == 'usdt')}
+        return balance_dic
+
 
 class StgHandlerBase(Thread, ABC):
     logger = logging.getLogger("StgHandlerBase")

@@ -19,6 +19,7 @@ from huobitrade.service import HBRestAPI
 from backend import engine_md
 from backend.orm import SymbolPair
 from enum import Enum
+
 logger = logging.getLogger()
 # 设置秘钥
 setKey(Config.EXCHANGE_ACCESS_KEY, Config.EXCHANGE_SECRET_KEY)
@@ -103,7 +104,7 @@ class BacktestTraderAgent(TraderAgent):
         # 更新持仓信息
         self._save_pos_status_info(trade_info)
 
-    def _save_pos_status_info(self, trade_info: TradeInfo)->AccountStatusInfo:
+    def _save_pos_status_info(self, trade_info: TradeInfo) -> AccountStatusInfo:
         """
         根据成交信息保存最新持仓信息
         :param trade_info: 
@@ -122,8 +123,8 @@ class BacktestTraderAgent(TraderAgent):
         self._pos_status_info_dic[instrument_id] = pos_status_info
         # self.c_save_acount_info(pos_status_info)
 
-    def _create_account_status_info(self)->AccountStatusInfo:
-        stg_run_id, init_cash, md =  self.stg_run_id, self.init_cash, self.curr_md
+    def _create_account_status_info(self) -> AccountStatusInfo:
+        stg_run_id, init_cash, md = self.stg_run_id, self.init_cash, self.curr_md
         trade_date = md['ts_start'].date()
         trade_time = md['ts_start'].time()
         trade_millisec = 0
@@ -142,7 +143,7 @@ class BacktestTraderAgent(TraderAgent):
                 session.commit()
         return acc_status_info
 
-    def _update_by_pos_status_info(self)->AccountStatusInfo:
+    def _update_by_pos_status_info(self) -> AccountStatusInfo:
         """根据 持仓列表更新账户信息"""
 
         pos_status_info_dic, md = self._pos_status_info_dic, self.curr_md
@@ -197,7 +198,7 @@ class BacktestTraderAgent(TraderAgent):
                 session.commit()
         return account_status_info
 
-    def _update_pos_status_info_by_md(self, pos_status_info_last)->PosStatusInfo:
+    def _update_pos_status_info_by_md(self, pos_status_info_last) -> PosStatusInfo:
         """创建新的对象，根据 trade_info 更新相关信息"""
         md = self.curr_md
         trade_date = md['ts_start'].date()
@@ -379,7 +380,7 @@ class RealTimeTraderAgent(TraderAgent):
         currency = self.get_currency(symbol)
         # currency = instrument_id
         # self.logger.debug('symbol:%s force_refresh=%s', symbol, force_refresh)
-        position_date_inv_pos_dic = self.get_balance_api(currency=currency, force_refresh=force_refresh)
+        position_date_inv_pos_dic = self.get_balance(currency=currency, force_refresh=force_refresh)
         return position_date_inv_pos_dic
 
     def get_currency(self, symbol):
@@ -392,7 +393,7 @@ class RealTimeTraderAgent(TraderAgent):
         """
         return self.symbol_currency_dic[symbol]
 
-    def get_balance_api(self, non_zero_only=False, trade_type_only=True, currency=None, force_refresh=False):
+    def get_balance(self, non_zero_only=False, trade_type_only=True, currency=None, force_refresh=False):
         """
         调用接口 查询 各个币种仓位
         :param non_zero_only: 只保留非零币种
@@ -484,6 +485,7 @@ class RealTimeTraderAgent(TraderAgent):
 
 if __name__ == "__main__":
     import time
+
     # 测试交易 下单接口及撤单接口
     symbol, vol, price = 'ocnusdt', 1, 0.00004611  # OCN/USDT
     td = RealTimeTraderAgent(stg_run_id=1, run_mode_params={})
