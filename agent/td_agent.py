@@ -10,10 +10,9 @@ from huobitrade import setKey
 from abat.backend.orm import OrderInfo, TradeInfo, PosStatusInfo, AccountStatusInfo
 from config import Config
 from abat.utils.db_utils import with_db_session
-from abat.utils.fh_utils import date_2_str
 from abat.backend import engine_abat
 from abat.common import Direction, Action, BacktestTradeMode, PositionDateType
-from abat.utils.fh_utils import try_n_times
+from abat.utils.fh_utils import try_n_times, ceil, floor
 from abat.trade import TraderAgent, register_backtest_trader_agent, register_realtime_trader_agent
 from huobitrade.service import HBRestAPI
 from backend import engine_md
@@ -338,6 +337,7 @@ class RealTimeTraderAgent(TraderAgent):
         self.currency_balance_dic = {}
         self.currency_balance_last_get_datetime = None
         self.symbol_currency_dic = None
+        self.symbol_precision_dic = None
         self._datetime_last_rtn_trade_dic = {}
         self._datetime_last_update_position_dic = {}
 
@@ -347,15 +347,28 @@ class RealTimeTraderAgent(TraderAgent):
             self.symbol_currency_dic = {
                 f'{sym.base_currency}{sym.quote_currency}': sym.base_currency
                 for sym in data}
+            self.symbol_precision_dic = {
+                f'{sym.base_currency}{sym.quote_currency}': (int(sym.price_precision), int(sym.amount_precision))
+                for sym in data}
 
-    @try_n_times(times=3, sleep_time=2, logger=logger)
+    # @try_n_times(times=3, sleep_time=2, logger=logger)
     def open_long(self, symbol, price, vol):
-        # self.trader_api.open_long(instrument_id, price, vol)
+        """买入多头"""
+        price_precision, amount_precision = self.symbol_precision_dic[symbol]
+        if isinstance(price, float):
+            price = format(price, f'.{price_precision}f')
+        if isinstance(vol, float):
+            vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.buy_limit.value, price)
         self._datetime_last_rtn_trade_dic[symbol] = datetime.now()
 
     def close_long(self, symbol, price, vol):
-        # self.trader_api.close_long(instrument_id, price, vol)
+        """卖出多头"""
+        price_precision, amount_precision = self.symbol_precision_dic[symbol]
+        if isinstance(price, float):
+            price = format(price, f'.{price_precision}f')
+        if isinstance(vol, float):
+            vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.sell_limit.value, price)
         self._datetime_last_rtn_trade_dic[symbol] = datetime.now()
 
@@ -400,12 +413,7 @@ class RealTimeTraderAgent(TraderAgent):
         :param trade_type_only: 只保留 trade 类型币种，frozen 类型的不保存
         :param currency: 只返回制定币种 usdt eth 等
         :param force_refresh: 强制刷新，默认没30秒允许重新查询一次
-        :return:
-        [{'currency': 'hb10', 'type': 'trade', 'balance': '0'},
-         {'currency': 'hb10', 'type': 'frozen', 'balance': '0'},
-         {'currency': 'usdt', 'type': 'trade', 'balance': '0.000161'},
-         {'currency': 'usdt', 'type': 'frozen', 'balance': '0'},
-         {'currency': 'btc', 'type': 'trade', 'balance': '0'}]
+        :return: {'usdt': {<PositionDateType.History: 2>: {'currency': 'usdt', 'type': 'trade', 'balance': 144.09238}}}
         """
         if force_refresh or self.currency_balance_last_get_datetime is None or \
                 self.currency_balance_last_get_datetime < datetime.now() - timedelta(seconds=30):
@@ -487,14 +495,16 @@ if __name__ == "__main__":
     import time
 
     # 测试交易 下单接口及撤单接口
-    symbol, vol, price = 'ocnusdt', 1, 0.00004611  # OCN/USDT
+    # symbol, vol, price = 'ocnusdt', 1, 0.00004611  # OCN/USDT
+    symbol, vol, price = 'eosusdt', 1.0251, 4.1234  # OCN/USDT
+
     td = RealTimeTraderAgent(stg_run_id=1, run_mode_params={})
     td.open_long(symbol=symbol, price=price, vol=vol)
     order_dic_list = td.get_order(instrument_id=symbol)
     print('after open_long', order_dic_list)
-    assert len(order_dic_list), 1
+    assert len(order_dic_list) == 1
     td.cancel_order(instrument_id=symbol)
     time.sleep(1)
     order_dic_list = td.get_order(instrument_id=symbol)
     print('after cancel', order_dic_list)
-    assert len(order_dic_list), 0
+    assert len(order_dic_list) == 0
