@@ -436,7 +436,6 @@ class RealTimeTraderAgent(TraderAgent):
 
                 if trade_type_only and balance_dic['type'] != 'trade':
                     continue
-                balance_val = float(balance_dic['balance'])
                 balance_dic['balance'] = float(balance_dic['balance'])
                 if PositionDateType.History in acc_balance_new_dic[currency_curr]:
                     balance_dic_old = acc_balance_new_dic[currency_curr][PositionDateType.History]

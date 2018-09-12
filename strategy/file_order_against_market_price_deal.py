@@ -121,12 +121,12 @@ class ReadFileStg(StgBase):
                     continue
                 position_df = position_df.append(position_df_tmp)
 
-            # if not DEBUG:
-            #     # 文件备份
-            #     backup_file_name = file_base_name + datetime.now().strftime(
-            #         '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
-            #     # 调试阶段暂时不重命名备份，不影响程序使用
-            #     os.rename(file_path, os.path.join(self._folder_path, backup_file_name))
+            # 调试阶段暂时不重命名备份，不影响程序使用
+            if not DEBUG:
+                # 文件备份
+                backup_file_name = file_base_name + datetime.now().strftime(
+                    '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
+                os.rename(file_path, os.path.join(self._folder_path, backup_file_name))
 
         return position_df, file_path_list
 
@@ -186,17 +186,17 @@ class ReadFileStg(StgBase):
                     self.logger.warning('%s 持仓权重 %.2f %% 无法计算目标持仓量', currency, weight * 100)
                     continue
                 # 检查当前持仓是否与目标持仓一致，如果一致则跳过
-                position_date_pos_info_dic = self.get_position(symbol)
-                if position_date_pos_info_dic is not None and len(position_date_pos_info_dic) > 0:
-                    # 有持仓，比较是否满足目标仓位，否则下指令
-                    position_cur = sum([pos_info['balance'] for pos_info in position_date_pos_info_dic.values()])
-                    position_gap = target_vol - position_cur
-                    # 实盘情况下，很少绝对一致，在一定区间内即可
-                    if position_gap > gap_threshold_vol:
-                        # 当前合约累计持仓与目标持仓不一致，则添加目标持仓任务
-                        is_all_fit_target = False
-                else:
-                    is_all_fit_target = False
+                # position_date_pos_info_dic = self.get_position(symbol)
+                # if position_date_pos_info_dic is not None and len(position_date_pos_info_dic) > 0:
+                #     # 有持仓，比较是否满足目标仓位，否则下指令
+                #     position_cur = sum([pos_info['balance'] for pos_info in position_date_pos_info_dic.values()])
+                #     position_gap = target_vol - position_cur
+                #     # 实盘情况下，很少绝对一致，在一定区间内即可
+                #     if position_gap > gap_threshold_vol:
+                #         # 当前合约累计持仓与目标持仓不一致，则添加目标持仓任务
+                #         is_all_fit_target = False
+                # else:
+                #     is_all_fit_target = False
                 # 无论仓位是否存在，均生成交易指令，待交易执行阶段进行比较（以上代码不影响是否生产建仓指令）
 
                 # 多头目标持仓
@@ -204,16 +204,17 @@ class ReadFileStg(StgBase):
                                                                     None, stop_loss_price,
                                                                     gap_threshold_vol=gap_threshold_vol)
 
-            if is_all_fit_target:
-                # 文件备份 file_path_list
-                for file_path in file_path_list:
-                    file_base_name_with_path, file_extension = os.path.split(file_path)
-                    backup_file_path = file_base_name_with_path + datetime.now().strftime(
-                        '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
-                    # 调试阶段暂时不重命名备份，不影响程序使用
-                    os.rename(file_path, backup_file_path)
-                    self.logger.info('备份仓位配置文件：%s -> %s', file_path, backup_file_path)
-            elif len(symbol_target_position_dic) > 0:
+            # if is_all_fit_target:
+            #     # 文件备份 file_path_list
+            #     for file_path in file_path_list:
+            #         file_base_name_with_path, file_extension = os.path.split(file_path)
+            #         backup_file_path = file_base_name_with_path + datetime.now().strftime(
+            #             '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
+            #         # 调试阶段暂时不重命名备份，不影响程序使用
+            #         os.rename(file_path, backup_file_path)
+            #         self.logger.info('备份仓位配置文件：%s -> %s', file_path, backup_file_path)
+            # el
+            if len(symbol_target_position_dic) > 0:
                 self.symbol_target_position_dic = symbol_target_position_dic
                 self.logger.info('发现新的目标持仓指令\n%s', symbol_target_position_dic)
             else:
