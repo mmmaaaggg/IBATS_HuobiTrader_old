@@ -33,6 +33,40 @@ import agent.td_agent
 DEBUG = False
 
 
+class TargetPosition:
+
+    def __init__(self, direction, currency, position, symbol,
+                 price=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=None):
+        self.direction = direction
+        self.currency = currency
+        self.position = position
+        self.symbol = symbol
+        self.price = price
+        self.stop_loss_price = stop_loss_price
+        self.has_stop_loss = has_stop_loss
+        self.gap_threshold_vol = gap_threshold_vol
+
+    def check_stop_loss(self, close):
+        """
+        根据当前价格计算是否已经到达止损点位
+        如果此前已经到达过止损点位则不再比较，也不需重置状态
+        :param close:
+        :return:
+        """
+        # 如果此前已经到达过止损点位则不再比较，也不需重置状态
+        if self.stop_loss_price is None or self.has_stop_loss:
+            return
+        self.has_stop_loss = (self.direction == Direction.Long and close < self.stop_loss_price) or (
+                self.direction == Direction.Short and close > self.stop_loss_price)
+        if self.has_stop_loss:
+            logging.warning('%s 处于止损状态。止损价格 %f 当前价格 %f', self.symbol, self.stop_loss_price, close)
+
+    def get_target_position(self):
+        return self.direction, self.currency, self.position, self.symbol, \
+               self.price, self.stop_loss_price, self.has_stop_loss, \
+               self.gap_threshold_vol
+
+
 class ReadFileStg(StgBase):
     _folder_path = os.path.abspath(r'.\file_order')
 
@@ -41,7 +75,7 @@ class ReadFileStg(StgBase):
         self._mutex = threading.Lock()
         self._last_check_datetime = datetime.now() - timedelta(minutes=1)
         self.interval_timedelta = timedelta(seconds=15)
-        self.target_position_dic = {}
+        self.symbol_target_position_dic = {}
         # 设定相应周期的事件驱动句柄 接收的参数类型
         self._on_period_event_dic[PeriodType.Tick].param_type = dict
         # 记录合约最近一次执行操作的时间
@@ -116,7 +150,7 @@ class ReadFileStg(StgBase):
                 return
 
             # {currency: (Direction, currency, target_position, symbol, target_price, stop_loss_price)
-            target_position_dic = {}
+            symbol_target_position_dic = {}
             # 检查目标仓位与当前持仓是否相符，否则执行相应交易
             target_currency_set = set(list(position_df['currency']))
             holding_currency_dic = self.get_holding_currency()
@@ -139,15 +173,7 @@ class ReadFileStg(StgBase):
                     continue
 
                 symbol = self.get_symbol_by_currency(currency)
-                # target_position_dic[symbol] = (Direction.Long, currency, 0, symbol, None, None)
-                target_position_dic[symbol] = {
-                    'direction': Direction.Long,
-                    'currency': currency,
-                    'position': 0,
-                    'symbol': symbol,
-                    'price': None,
-                    'stop_loss_price': None
-                }
+                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, 0, symbol)
                 is_all_fit_target = False
 
             # 生成目标持仓列表买入指令
@@ -155,7 +181,7 @@ class ReadFileStg(StgBase):
                 weight = position_dic['weight']
                 stop_loss_price = position_dic['stop_loss_price']
                 symbol = self.get_symbol_by_currency(currency)
-                target_vol = self.calc_vol(symbol, weight)
+                target_vol, gap_threshold_vol = self.calc_vol(symbol, weight)
                 if target_vol is None:
                     self.logger.warning('%s 持仓权重 %.2f %% 无法计算目标持仓量', currency, weight * 100)
                     continue
@@ -166,7 +192,7 @@ class ReadFileStg(StgBase):
                     position_cur = sum([pos_info['balance'] for pos_info in position_date_pos_info_dic.values()])
                     position_gap = target_vol - position_cur
                     # 实盘情况下，很少绝对一致，在一定区间内即可
-                    if position_gap > self.min_order_vol:
+                    if position_gap > gap_threshold_vol:
                         # 当前合约累计持仓与目标持仓不一致，则添加目标持仓任务
                         is_all_fit_target = False
                 else:
@@ -174,15 +200,9 @@ class ReadFileStg(StgBase):
                 # 无论仓位是否存在，均生成交易指令，待交易执行阶段进行比较（以上代码不影响是否生产建仓指令）
 
                 # 多头目标持仓
-                # target_position_dic[symbol] = (Direction.Long, currency, target_vol, symbol, None, stop_loss_price)
-                target_position_dic[symbol] = {
-                    'direction': Direction.Long,
-                    'currency': currency,
-                    'position': target_vol,
-                    'symbol': symbol,
-                    'price': None,
-                    'stop_loss_price': stop_loss_price
-                }
+                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, target_vol, symbol,
+                                                                    None, stop_loss_price,
+                                                                    gap_threshold_vol=gap_threshold_vol)
 
             if is_all_fit_target:
                 # 文件备份 file_path_list
@@ -193,11 +213,11 @@ class ReadFileStg(StgBase):
                     # 调试阶段暂时不重命名备份，不影响程序使用
                     os.rename(file_path, backup_file_path)
                     self.logger.info('备份仓位配置文件：%s -> %s', file_path, backup_file_path)
-            elif len(target_position_dic) > 0:
-                self.target_position_dic = target_position_dic
-                self.logger.info('发现新的目标持仓指令\n%s', target_position_dic)
+            elif len(symbol_target_position_dic) > 0:
+                self.symbol_target_position_dic = symbol_target_position_dic
+                self.logger.info('发现新的目标持仓指令\n%s', symbol_target_position_dic)
             else:
-                self.target_position_dic = None
+                self.symbol_target_position_dic = None
                 self.logger.debug('无仓位调整指令')
 
     def do_order(self, md_dic, instrument_id, order_vol, price=None, direction=Direction.Long, stop_loss_price=0,
@@ -252,17 +272,15 @@ class ReadFileStg(StgBase):
         # self.logger.debug('get tick data: %s', md_dic)
         symbol = md_dic['symbol']
         # 更新最新价格
-        self.symbol_latest_price_dic[symbol] = md_dic['close']
+        close_cur = md_dic['close']
+        self.symbol_latest_price_dic[symbol] = close_cur
         # 计算是否需要进行调仓操作
-        if self.target_position_dic is None or len(self.target_position_dic) == 0:
+        if self.symbol_target_position_dic is None or symbol not in self.symbol_target_position_dic:
             return
         if self.datetime_last_update_position is None:
             logging.debug("尚未获取持仓数据，跳过")
             return
 
-        # self.logger.debug('target_position_dic: %s', self.target_position_dic)
-        if symbol not in self.target_position_dic:
-            return
         target_currency = self.trade_agent.get_currency(symbol)
         # self.logger.debug('target_position_dic[%s]: %s', symbol, self.target_position_dic[symbol])
         # 如果的当前合约近期存在交易回报，则交易回报时间一定要小于查询持仓时间：
@@ -288,67 +306,62 @@ class ReadFileStg(StgBase):
                 return
 
         with self._mutex:
+            target_position = self.symbol_target_position_dic[symbol]
+            target_position.check_stop_loss(close_cur)
+
             # 撤销所有相关订单
             self.cancel_order(symbol)
 
             # 计算目标仓位方向及交易数量
             position_date_pos_info_dic = self.get_position(symbol)
             if position_date_pos_info_dic is None:
-                # 如果当前无持仓，直接按照目标仓位进行开仓动作
-                if symbol not in self.target_position_dic:
-                    # 无当前持仓，无目标仓位
-                    pass
-                else:
-                    # 无当前持仓，有目标仓位，直接按照目标仓位进行开仓动作
-                    target_direction, target_currency, target_position, symbol, target_price, stop_loss_price, has_stop_loss = self.get_target_position(
-                        symbol)
-                    if not has_stop_loss:
-                        self.do_order(md_dic, symbol, target_position, target_price, target_direction, stop_loss_price,
-                                      msg='当前无持仓')
+                # 无当前持仓，有目标仓位，直接按照目标仓位进行开仓动作
+                # target_direction, target_currency, target_position, symbol, target_price, \
+                # stop_loss_price, has_stop_loss, gap_threshold_vol = self.get_target_position(symbol)
+                if not target_position.has_stop_loss:
+                    self.do_order(md_dic, symbol, target_position.position, target_position.price,
+                                  target_position.direction, target_position.stop_loss_price, msg='当前无持仓')
             else:
                 # 如果当前有持仓，执行两类动作：
                 # 1）若 当前持仓与目标持仓不匹配，则进行相应的调仓操作
                 # 2）若 当前持仓价格超出止损价位，则进行清仓操作
 
+                position_holding = sum(
+                    [pos_info_dic['balance'] for pos_info_dic in position_date_pos_info_dic.values()])
+                self.logger.debug('当前 %s 持仓 %f', target_position.currency, position_holding)
                 # 比较当前持仓总量与目标仓位是否一致
-                if symbol not in self.target_position_dic:
-                    # target_currency = self.trade_agent.get_currency(symbol)
-                    # # 如果当前有持仓，目标仓位为空，则当前持仓无论多空全部平仓
-                    # for position_date_type, pos_info_dic in position_date_pos_info_dic.items():
-                    #     position = pos_info_dic['balance']
-                    #     self.do_order(md_dic, symbol, -position,
-                    #                   msg='目标仓位0，全部平仓')
-                    self.logger.error('当前分支应该不会被执行到，需要检查代码查看是否存在意外的改动')
+                # 如果当前有持仓，目标仓位也有持仓，则需要进一步比对
+                # target_direction, target_currency, target_position, symbol, target_price, \
+                # stop_loss_price, has_stop_loss, gap_threshold_vol = self.get_target_position(symbol)
+                if target_position.has_stop_loss:
+                    # 已经触发止损，如果依然有持仓，则进行持续清仓操作
+                    self.do_order(md_dic, symbol, -position_holding, None,
+                                  target_position.direction, msg="止损")
                 else:
-                    # 如果当前有持仓，目标仓位也有持仓，则需要进一步比对
-                    target_direction, target_currency, target_position, symbol, target_price, stop_loss_price, has_stop_loss = self.get_target_position(
-                        symbol)
-                    if has_stop_loss:
-                        # 已经触发止损，如果依然有持仓，则进行持续清仓操作
-                        pass
-                    else:
-                        # 汇总全部同方向持仓，如果不够目标仓位，则加仓
-                        # 对全部的反方向持仓进行平仓
-                        position_holding = sum(
-                            [pos_info_dic['balance'] for pos_info_dic in position_date_pos_info_dic.values()])
+                    # 汇总全部同方向持仓，如果不够目标仓位，则加仓
+                    # 对全部的反方向持仓进行平仓
 
-                        # 如果持仓超过目标仓位，则平仓多出的部分，如果不足则补充多的部分
-                        position_gap = target_position - position_holding
-                        if position_gap > self.min_order_vol:
-                            # 如果不足则补充多的部分
-                            self.do_order(md_dic, symbol, position_gap, target_price, target_direction, stop_loss_price,
-                                          msg="补充仓位")
-                        elif position_gap < -self.min_order_vol:
-                            if target_position == 0:
-                                msg = '清仓'
-                            else:
-                                msg = "持仓超过目标仓位，平仓 %.4f" % position_gap
-                            # 如果持仓超过目标仓位，则平仓多出的部分
-                            self.do_order(md_dic, symbol, position_gap, target_price, target_direction, stop_loss_price,
-                                          msg=msg)
+                    # 如果持仓超过目标仓位，则平仓多出的部分，如果不足则补充多的部分
+                    position_gap = target_position.position - position_holding
+                    if position_gap > target_position.gap_threshold_vol:
+                        if position_holding < target_position.gap_threshold_vol:
+                            msg = '建仓'
                         else:
-                            self.logger.debug('当前持仓 %f 与目标持仓%f 差距 %f 过小，忽略此调整',
-                                              position_holding, target_position, position_gap)
+                            msg = "补充仓位"
+                        # 如果不足则补充多的部分
+                        self.do_order(md_dic, symbol, position_gap, target_position.price,
+                                      target_position.direction, target_position.stop_loss_price, msg=msg)
+                    elif position_gap < - target_position.gap_threshold_vol:
+                        if target_position.position == 0:
+                            msg = '清仓'
+                        else:
+                            msg = "持仓超过目标仓位，减仓 %.4f" % position_gap
+                        # 如果持仓超过目标仓位，则平仓多出的部分
+                        self.do_order(md_dic, symbol, position_gap, target_position.price,
+                                      target_position.direction, target_position.stop_loss_price, msg=msg)
+                    else:
+                        self.logger.debug('当前持仓 %f 与目标持仓%f 差距 %f 过小，忽略此调整',
+                                          position_holding, target_position.position, position_gap)
 
         # 更新最近执行时间
         self.symbol_last_deal_datetime[symbol] = datetime.now()
@@ -357,7 +370,7 @@ class ReadFileStg(StgBase):
         """目前暂时仅支持currency 与 usdt 之间转换"""
         return currency + 'usdt'
 
-    def calc_vol(self, symbol, weight):
+    def calc_vol(self, symbol, weight, gap_threshold_precision=0.01):
         """
         根据权重及当前账号总市值，计算当前 symbol 对应多少 vol
         :param symbol:
@@ -370,6 +383,7 @@ class ReadFileStg(StgBase):
         if symbol not in self.symbol_latest_price_dic or self.symbol_latest_price_dic[symbol] == 0:
             self.logger.error('%s 没有找到有效的最新价格', symbol)
             weight_vol = None
+            gap_threshold_vol = None
         else:
             tot_value = 0
             for currency, dic in holding_currency_dic.items():
@@ -381,13 +395,15 @@ class ReadFileStg(StgBase):
                             self.get_symbol_by_currency(currency)]
 
             weight_vol = tot_value * weight / self.symbol_latest_price_dic[symbol]
+            gap_threshold_vol = tot_value * gap_threshold_precision / self.symbol_latest_price_dic[symbol]
 
-        return weight_vol
+        return weight_vol, gap_threshold_vol
 
     def get_target_position(self, symbol):
-        dic = self.target_position_dic[symbol]
+        dic = self.symbol_target_position_dic[symbol]
         return dic['direction'], dic['currency'], dic['position'], dic['symbol'], \
-               dic['price'], dic['stop_loss_price'], dic.setdefault('has_stop_loss', False)
+               dic['price'], dic['stop_loss_price'], dic.setdefault('has_stop_loss', False), \
+               dic.setdefault('gap_threshold_vol', None)
 
 
 if __name__ == '__main__':

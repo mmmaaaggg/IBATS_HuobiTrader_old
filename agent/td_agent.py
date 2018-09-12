@@ -17,6 +17,7 @@ from abat.trade import TraderAgent, register_backtest_trader_agent, register_rea
 from huobitrade.service import HBRestAPI
 from backend import engine_md
 from backend.orm import SymbolPair
+from collections import defaultdict
 from enum import Enum
 
 logger = logging.getLogger()
@@ -358,6 +359,9 @@ class RealTimeTraderAgent(TraderAgent):
         if isinstance(price, float):
             price = format(price, f'.{price_precision}f')
         if isinstance(vol, float):
+            if vol < 10 ** -amount_precision:
+                logger.warning('%s 订单量 %f 太小，忽略')
+                return
             vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.buy_limit.value, price)
         self._datetime_last_rtn_trade_dic[symbol] = datetime.now()
@@ -368,6 +372,9 @@ class RealTimeTraderAgent(TraderAgent):
         if isinstance(price, float):
             price = format(price, f'.{price_precision}f')
         if isinstance(vol, float):
+            if vol < 10 ** -amount_precision:
+                logger.warning('%s 订单量 %f 太小，忽略')
+                return
             vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.sell_limit.value, price)
         self._datetime_last_rtn_trade_dic[symbol] = datetime.now()
@@ -419,18 +426,25 @@ class RealTimeTraderAgent(TraderAgent):
                 self.currency_balance_last_get_datetime < datetime.now() - timedelta(seconds=30):
             ret_data = self.trader_api.get_balance()
             acc_balance = ret_data['data']['list']
-            acc_balance_new_dic = {}
-            for balance in acc_balance:
-                currency_curr = balance['currency']
+            acc_balance_new_dic = defaultdict(dict)
+            for balance_dic in acc_balance:
+                currency_curr = balance_dic['currency']
                 self._datetime_last_update_position_dic[currency_curr] = datetime.now()
 
-                if non_zero_only and balance['balance'] == '0':
+                if non_zero_only and balance_dic['balance'] == '0':
                     continue
 
-                if trade_type_only and balance['type'] != 'trade':
+                if trade_type_only and balance_dic['type'] != 'trade':
                     continue
-                balance['balance'] = float(balance['balance'])
-                acc_balance_new_dic[currency_curr] = {PositionDateType.History: balance}
+                balance_val = float(balance_dic['balance'])
+                balance_dic['balance'] = float(balance_dic['balance'])
+                if PositionDateType.History in acc_balance_new_dic[currency_curr]:
+                    balance_dic_old = acc_balance_new_dic[currency_curr][PositionDateType.History]
+                    balance_dic_old['balance'] += balance_dic['balance']
+                    # TODO: 日后可以考虑将 PositionDateType.History 替换为 type
+                    acc_balance_new_dic[currency_curr][PositionDateType.History] = balance_dic
+                else:
+                    acc_balance_new_dic[currency_curr] = {PositionDateType.History: balance_dic}
 
             self.currency_balance_dic = acc_balance_new_dic
             self.currency_balance_last_get_datetime = datetime.now()
