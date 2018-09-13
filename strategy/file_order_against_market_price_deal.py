@@ -211,7 +211,10 @@ class ReadFileStg(StgBase):
             #         backup_file_path = file_base_name_with_path + datetime.now().strftime(
             #             '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
             #         # 调试阶段暂时不重命名备份，不影响程序使用
-            #         os.rename(file_path, backup_file_path)
+            #         os.rename(file_path,
+            #                   os.path.join(
+            #                       file_base_name_with_path,
+            #                       datetime.now().strftime('%Y-%m-%d %H_%M_%S') + file_extension + '.bak'))
             #         self.logger.info('备份仓位配置文件：%s -> %s', file_path, backup_file_path)
             # el
             if len(symbol_target_position_dic) > 0:
