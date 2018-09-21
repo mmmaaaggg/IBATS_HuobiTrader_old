@@ -325,6 +325,11 @@ class BacktestTraderAgent(TraderAgent):
         else:
             return None
 
+    def get_balance(self):
+        position_date_pos_info_dic = {key: {PositionDateType.History: pos_status_info}
+         for key, pos_status_info in self._pos_status_info_dic.items()}
+        return position_date_pos_info_dic
+
 
 @register_realtime_trader_agent
 class RealTimeTraderAgent(TraderAgent):

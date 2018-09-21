@@ -55,12 +55,12 @@ class MdAgentPub(MdAgentBase):
             # ORDER BY ActionDay DESC, ActionTime DESC %s"""
             with with_db_session(engine_md) as session:
                 query = session.query(
-                    MDMin1.pair.label('pair'), MDMin1.ts_start.label('ts_start'),
+                    MDMin1.symbol.label('pair'), MDMin1.ts_start.label('ts_start'),
                     MDMin1.open.label('open'), MDMin1.high.label('high'),
                     MDMin1.low.label('low'), MDMin1.close.label('close'),
                     MDMin1.vol.label('vol'), MDMin1.amount.label('amount'), MDMin1.count.label('count')
                 ).filter(
-                    MDMin1.pair.in_(self.instrument_id_set)
+                    MDMin1.symbol.in_(self.instrument_id_set)
                 ).order_by(MDMin1.ts_start.desc())
                 # 设置参数
                 params = list(self.instrument_id_set)
