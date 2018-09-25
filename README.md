@@ -20,9 +20,11 @@ Auto Backtest Analysis Trade Framework （简称ABAT）支持期货、数字货�
 ## 安装
 
 系统环境要求：
->Python 3.6 \
-MySQL 5.7 \
-Redis 3.0.6 
+> Python 3.6 
+>
+> MySQL 5.7 (具体配置见下文)
+> 
+> Redis 3.0.6 
 
 ## 配置
 
@@ -114,3 +116,64 @@ def factory(stg_class_obj: StgBase.__class__, strategy_params, md_agent_params_l
 
 ![微信打赏](https://github.com/mmmaaaggg/ABAT_trader_4_blockchain/blob/master/mass/dashang_code200.png?raw=true)
 
+## MySQL 配置方法
+
+ 1. Ubuntu 18.04 环境下安装 MySQL，5.7
+ 
+    ```bash
+    sudo apt install mysql-server
+    ```
+ 2. 默认情况下，没有输入用户名密码的地方，因此，安装完后需要手动重置Root密码，方法如下：
+
+    ```bash
+    cd /etc/mysql/debian.cnf
+    sudo more debian.cnf
+    ```
+    出现类似这样的东西
+    > \# Automatically generated for Debian scripts. DO NOT TOUCH!
+    [client]
+    host     = localhost
+    user     = debian-sys-maint
+    password = j1bsABuuDRGKCV5s
+    socket   = /var/run/mysqld/mysqld.sock
+    [mysql_upgrade]
+    host     = localhost
+    user     = debian-sys-maint
+    password = j1bsABuuDRGKCV5s
+    socket   = /var/run/mysqld/mysqld.sock
+
+    以debian-sys-maint为用户名登录，密码就是debian.cnf里那个 password = 后面的东西。
+    使用mysql -u debian-sys-maint -p 进行登录。
+    进入mysql之后修改MySQL的密码，具体的操作如下用命令：
+    ```mysql
+    use mysql;
+    
+    update user set authentication_string=PASSWORD("Dcba4321") where user='root';
+    
+    update user set plugin="mysql_native_password"; 
+     
+    flush privileges;
+    ```
+ 3. 然后就可以用过root用户登陆了
+
+    ```bash
+    mysql -uroot -p
+    ```
+
+ 4. 创建用户 mg 默认密码 Abcd1234
+
+    ```mysql
+    CREATE USER 'mg'@'%' IDENTIFIED BY 'Abcd1234';
+    ```
+ 5. 创建数据库 bc_md
+
+    ```mysql
+    CREATE DATABASE `abat` default charset utf8 collate utf8_general_ci;
+    ```
+ 6. 授权
+
+    ```mysql
+    grant all privileges on abat.* to 'mg'@'localhost' identified by 'Abcd1234'; 
+    
+    flush privileges; #刷新系统权限表
+    ```
