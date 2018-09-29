@@ -68,7 +68,7 @@ class TargetPosition:
 
 
 class ReadFileStg(StgBase):
-    _folder_path = os.path.abspath(r'.\file_order')
+    _folder_path = os.path.abspath(os.path.join(os.path.curdir, r'file_order'))
 
     def __init__(self):
         super().__init__()
