@@ -83,4 +83,12 @@ def main(num):
 
 
 if __name__ == "__main__":
-    main(standalone_mode=False)
+    import sys
+    if len(sys.argv) > 1:
+        if sys.argv[1] == 'init':
+            from abat.backend.orm import init
+            init()
+        else:
+            raise KeyError('param %s not supported', sys.argv[1])
+    else:
+        main(standalone_mode=False)

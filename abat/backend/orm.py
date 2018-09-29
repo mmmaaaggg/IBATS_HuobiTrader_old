@@ -551,7 +551,7 @@ class AccountStatusInfo(BaseModel):
         return account_status_info
 
 
-if __name__ == "__main__":
+def init():
     from abat.backend import engine_abat
 
     BaseModel.metadata.create_all(engine_abat)
@@ -560,6 +560,10 @@ if __name__ == "__main__":
             sql_str = "ALTER TABLE %s ENGINE = MyISAM" % table_name
             session.execute(sql_str)
     print("所有表结构建立完成")
+
+
+if __name__ == "__main__":
+    init()
     # 创建user表，继承metadata类
     # Engine使用Schama Type创建一个特定的结构对象
     # stg_info_table = Table("stg_info", metadata, autoload=True)
