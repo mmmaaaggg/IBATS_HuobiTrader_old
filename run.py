@@ -19,8 +19,7 @@ logger = logging.getLogger()
 
 strategy_list = [ReadFileStg]  # , MACroseStg
 promt_str = '输入对应数字选择执行策略：\n' + \
-            '\n'.join(['%d) %s' % (num, foo.__name__) for num, foo in enumerate(strategy_list)]) + \
-            '\n'
+            '\n'.join(['%d) %s' % (num, foo.__name__) for num, foo in enumerate(strategy_list)]) + '\n'
 
 
 @click.command()

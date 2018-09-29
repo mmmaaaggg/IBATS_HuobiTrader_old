@@ -23,6 +23,9 @@ from abat.backend.orm import StgRunInfo
 from abat.trade import trader_agent_class_dic
 
 
+logger_stg_base = logging.getLogger('StgBase')
+
+
 class StgBase:
 
     def __init__(self):
@@ -97,7 +100,7 @@ class StgBase:
             self._md_period_df_dic[period] = md_df_his
             self._md_period_df_col_name_list_dic[period] = \
                 list(md_df.columns) if isinstance(md_df, pd.DataFrame) else None
-            # self.logger.debug('%s -> %s', period, md)
+            # logger_stg_base.debug('%s -> %s', period, md)
         return md_df_his
 
     def _on_period_md_event(self, period, md_df_his):
@@ -117,7 +120,7 @@ class StgBase:
     def on_period_md_handler(self, period, md):
         """响应 period 数据"""
         # 本机测试，延时0.155秒，从分钟K线合成到交易策略端收到数据
-        self.logger.debug("%s -> %s", PeriodType(period), md)
+        logger_stg_base.debug("%s -> %s", PeriodType(period), md)
         # self._on_period_md_event(period, md_df_his)
         period_event_relation = self._on_period_event_dic[period]
         event_handler = period_event_relation.md_event
