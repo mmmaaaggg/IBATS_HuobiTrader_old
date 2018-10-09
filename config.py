@@ -39,18 +39,13 @@ class ConfigBase:
 
 class ConfigProduct(ConfigBase):
     # 测试子账户 key
-    EXCHANGE_ACCESS_KEY = '2b92d1c8-6a14ed48-fd875ed3-bff67'
-    EXCHANGE_SECRET_KEY = '074cb202-5fdf697f-6cc70741-6d5c8'
+    EXCHANGE_ACCESS_KEY = '***'
+    EXCHANGE_SECRET_KEY = '***'
 
     DB_URL_DIC = {
-        ConfigBase.DB_SCHEMA_MD: 'mysql://mg:Dcba1234@10.0.3.66/' + ConfigBase.DB_SCHEMA_MD,
-        ConfigBase.DB_SCHEMA_ABAT: 'mysql://mg:Dcba1234@10.0.3.66/' + ConfigBase.DB_SCHEMA_ABAT,
+        ConfigBase.DB_SCHEMA_MD: 'mysql://mg:***@10.0.3.66/' + ConfigBase.DB_SCHEMA_MD,
+        ConfigBase.DB_SCHEMA_ABAT: 'mysql://mg:***@10.0.3.66/' + ConfigBase.DB_SCHEMA_ABAT,
     }
-
-    # redis info
-    REDIS_INFO_DIC = {'REDIS_HOST': '192.168.239.131',
-                      'REDIS_PORT': '6379',
-                      }
 
 
 # 开发配置（SIMNOW MD + Trade）
