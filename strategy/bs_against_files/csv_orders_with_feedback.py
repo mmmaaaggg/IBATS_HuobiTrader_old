@@ -3,39 +3,47 @@
 @author  : MG
 @Time    : 2017/11/18
 @author  : MG
-@desc    : 接受文件订单
+@desc    : 监控csv文件（每15秒）
+对比当前日期与回测csv文件中最新记录是否匹配，存在最新交易请求，生成交易请求（order*.csv文件）
 追踪tick级行情实时成交（仅适合小资金）
-追踪tick级行情固定点位止损
+追踪tick级行情本金买入点 * N % 止损
 目前仅支持做多，不支持做空
 
 每15秒进行一次文件检查
 文件格式(csv xls)，每个symbol一行，不可重复，例：卖出eth 买入eos， 不考虑套利的情况（套利需要单独开发其他策略）
 显示如下（非文件格式，csv文件以‘,’为分隔符，这个近为视觉好看，以表格形式显示）：
-currency   symbol     weight  stop_loss_price
-eth        ethusdt    0.5        2.5
-eos        eosusdt    0.5        200
+currency   symbol     weight  stop_loss_rate
+eth        ethusdt    0.5        0.3
+eos        eosusdt    0.5        0.4
 """
+import re
 import threading
 import time
 import logging
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from abat.strategy import StgBase, StgHandlerBase
+from abat.utils.fh_utils import str_2_date
 from config import Config
 from abat.common import PeriodType, RunMode, BacktestTradeMode, Direction, PositionDateType
 from collections import defaultdict
 import os
+import json
 # 下面代码是必要的引用
 # md_agent md_agent 并没有“显式”的被使用，但是在被引用期间，已经将相应的 agent 类注册到了相应的列表中
 import agent.md_agent
 import agent.td_agent
 
 DEBUG = False
+# "TradeBookCryptoCurrency2018-10-08.csv"
+PATTERN_BACKTEST_FILE_NAME = re.compile(r'(?<=TradeBookCryptoCurrency)[\d\-]{8,10}(?=.csv)')
+PATTERN_ORDER_FILE_NAME = re.compile(r'order.*\.csv')
+PATTERN_FEEDBACK_FILE_NAME = re.compile(r'feedback.*\.json')
 
 
 class TargetPosition:
 
-    def __init__(self, direction, currency, position, symbol,
+    def __init__(self, direction: Direction, currency, position, symbol,
                  price=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=None):
         self.direction = direction
         self.currency = currency
@@ -66,6 +74,10 @@ class TargetPosition:
                self.price, self.stop_loss_price, self.has_stop_loss, \
                self.gap_threshold_vol
 
+    def to_dict(self):
+        return {attr: getattr(self, attr) for attr in dir(self)
+                if attr.find('_') != 0 and not callable(getattr(self, attr))}
+
 
 class ReadFileStg(StgBase):
     _folder_path = os.path.abspath(os.path.join(os.path.curdir, r'file_order'))
@@ -86,6 +98,9 @@ class ReadFileStg(StgBase):
         self.timedelta_between_deal = timedelta(seconds=3)
         self.min_order_vol = 0.1
         self.symbol_latest_price_dic = defaultdict(float)
+        self.weight = 1
+        self.stop_loss_rate = -0.03
+        self.load_feedback_file()
 
     def fetch_pos_by_file(self):
         """读取仓位配置csv文件，返回目标仓位DataFrame"""
@@ -101,9 +116,11 @@ class ReadFileStg(StgBase):
         position_df = None
         file_path_list = []
         for file_name in file_name_list:
-            file_base_name, file_extension = os.path.splitext(file_name)
-            if file_extension.lower() != '.csv':
+            # 仅处理 order*.csv文件
+            if PATTERN_ORDER_FILE_NAME.search(file_name) is not None:
                 continue
+            self.logger.debug('处理文件 %s', file_name)
+            file_base_name, file_extension = os.path.splitext(file_name)
             file_path = os.path.join(self._folder_path, file_name)
             file_path_list.append(file_path)
             position_df_tmp = pd.read_csv(file_path)
@@ -124,25 +141,77 @@ class ReadFileStg(StgBase):
             # 调试阶段暂时不重命名备份，不影响程序使用
             if not DEBUG:
                 # 文件备份
-                backup_file_name = file_base_name + datetime.now().strftime(
-                    '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
+                backup_file_name = f"{file_base_name} {datetime.now().strftime('%Y-%m-%d %H_%M_%S')}" \
+                                   f"{file_extension}.bak"
                 os.rename(file_path, os.path.join(self._folder_path, backup_file_name))
+                self.logger.info('备份 order 文件 %s -> %s', file_name, backup_file_name)
 
         return position_df, file_path_list
 
-    def on_timer(self):
+    def handle_backtest_file(self):
         """
-        每15秒进行一次文件检查
+        处理王淳的回测文件，生成相应的交易指令文件
+        :return:
+        """
+        with self._mutex:
+            # 获取文件列表
+            file_name_list = os.listdir(self._folder_path)
+            if file_name_list is None:
+                # self.logger.info('No file')
+                return
+            # 读取所有 csv 文件
+            for file_name in file_name_list:
+                file_base_name, file_extension = os.path.splitext(file_name)
+                # 仅处理 order*.csv文件
+                m = PATTERN_BACKTEST_FILE_NAME.search(file_name)
+                if m is not None:
+                    continue
+                file_date_str = m.group()
+                file_date = str_2_date(file_date_str)
+                if file_date != date.today():
+                    self.logger.warning('文件：%s 日期与当前系统日期 %s 不匹配，不予处理', file_name, date.today())
+                    continue
+                self.logger.debug('处理文件 %s 文件日期：%s', file_name, file_date_str)
+                file_path = os.path.join(self._folder_path, file_name)
+                data_df = pd.read_csv(file_path)
+                if data_df is None or data_df.shape[0] == 0:
+                    continue
+                if str_2_date(data_df.iloc[-1]['Date']) != file_date:
+                    self.logger.warning('文件：%s 回测记录中最新日期与当前文件日期 %s 不匹配，不予处理', file_name, file_date)
+                    continue
+
+                # 生成交易指令文件
+                currency = data_df.iloc[-1]['InstruLong'].lower()
+                order_dic = {
+                    'currency': [currency],
+                    'symbol': [f'{currency}usdt'],
+                    'weight': [self.weight],
+                    'stop_loss_rate': [self.stop_loss_rate],
+                }
+                order_file_name = f'order_{file_date_str}.csv'
+                order_file_path = os.path.join(self._folder_path, order_file_name)
+                order_df = pd.DataFrame(order_dic)
+                order_df.to_csv(order_file_path)
+                # 调试阶段暂时不重命名备份，不影响程序使用
+                if not DEBUG:
+                    # 文件备份
+                    backup_file_name = f"{file_base_name} {datetime.now().strftime('%Y-%m-%d %H_%M_%S')}" \
+                                       f"{file_extension}.bak"
+                    os.rename(file_path, os.path.join(self._folder_path, backup_file_name))
+
+    def handle_order_file(self):
+        """
         获得目标持仓currency， 权重，止损点位
         生成相应交易指令
-        :param md_df:
-        :param context: 
-        :return: 
+        另外，如果发现新的交易order文件，则将所有的 feedback 文件备份（根据新的order进行下单，生成新的feedback文件）
+        :return:
         """
         with self._mutex:
             position_df, file_path_list = self.fetch_pos_by_file()
             if position_df is None or position_df.shape[0] == 0:
                 return
+            # 如果存在新的 order 指令，则将所有的 feedback 文件备份（根据新的order进行下单，生成新的feedback文件）
+            self.backup_feedback_files()
             self.logger.debug('仓位调整目标：\n%s', position_df)
             target_holding_dic = position_df.set_index('currency').dropna().to_dict('index')
             if len(self.symbol_latest_price_dic) == 0:
@@ -179,9 +248,10 @@ class ReadFileStg(StgBase):
             # 生成目标持仓列表买入指令
             for num, (currency, position_dic) in enumerate(target_holding_dic.items()):
                 weight = position_dic['weight']
-                stop_loss_price = position_dic['stop_loss_price']
+                stop_loss_rate = position_dic['stop_loss_rate']
+                # stop_loss_price = position_dic['stop_loss_rate']
                 symbol = self.get_symbol_by_currency(currency)
-                target_vol, gap_threshold_vol = self.calc_vol(symbol, weight)
+                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(symbol, weight, stop_loss_rate)
                 if target_vol is None:
                     self.logger.warning('%s 持仓权重 %.2f %% 无法计算目标持仓量', currency, weight * 100)
                     continue
@@ -204,25 +274,26 @@ class ReadFileStg(StgBase):
                                                                     None, stop_loss_price,
                                                                     gap_threshold_vol=gap_threshold_vol)
 
-            # if is_all_fit_target:
-            #     # 文件备份 file_path_list
-            #     for file_path in file_path_list:
-            #         file_base_name_with_path, file_extension = os.path.split(file_path)
-            #         backup_file_path = file_base_name_with_path + datetime.now().strftime(
-            #             '%Y-%m-%d %H_%M_%S') + file_extension + '.bak'
-            #         # 调试阶段暂时不重命名备份，不影响程序使用
-            #         os.rename(file_path,
-            #                   os.path.join(
-            #                       file_base_name_with_path,
-            #                       datetime.now().strftime('%Y-%m-%d %H_%M_%S') + file_extension + '.bak'))
-            #         self.logger.info('备份仓位配置文件：%s -> %s', file_path, backup_file_path)
-            # el
             if len(symbol_target_position_dic) > 0:
                 self.symbol_target_position_dic = symbol_target_position_dic
                 self.logger.info('发现新的目标持仓指令\n%s', symbol_target_position_dic)
+                # 生成 feedback 文件
+                self.create_feedback_file()
             else:
                 self.symbol_target_position_dic = None
                 self.logger.debug('无仓位调整指令')
+
+    def on_timer(self):
+        """
+        每15秒进行一次文件检查
+        1）检查王淳的回测文件，匹配最新日期 "TradeBookCryptoCurrency2018-10-08.csv" 中的日期是否与系统日期一致，如果一致则处理，生成“交易指令文件”
+        2）生成相应目标仓位文件 order_2018-10-08.csv
+        :param md_df:
+        :param context: 
+        :return: 
+        """
+        self.handle_backtest_file()
+        self.handle_order_file()
 
     def do_order(self, md_dic, instrument_id, order_vol, price=None, direction=Direction.Long, stop_loss_price=0,
                  msg=""):
@@ -374,11 +445,13 @@ class ReadFileStg(StgBase):
         """目前暂时仅支持currency 与 usdt 之间转换"""
         return currency + 'usdt'
 
-    def calc_vol(self, symbol, weight, gap_threshold_precision=0.01):
+    def calc_vol_and_stop_loss_price(self, symbol, weight, stop_loss_rate=None, gap_threshold_precision=0.01):
         """
-        根据权重及当前账号总市值，计算当前 symbol 对应多少 vol
+        根据权重及当前账号总市值，计算当前 symbol 对应多少 vol, 根据 stop_loss_rate 计算止损价格
         :param symbol:
         :param weight:
+        :param stop_loss_rate:
+        :param gap_threshold_precision:
         :return:
         """
         holding_currency_dic = self.get_holding_currency(exclude_usdt=False)
@@ -388,6 +461,7 @@ class ReadFileStg(StgBase):
             self.logger.error('%s 没有找到有效的最新价格', symbol)
             weight_vol = None
             gap_threshold_vol = None
+            stop_loss_price = None
         else:
             tot_value = 0
             for currency, dic in holding_currency_dic.items():
@@ -398,16 +472,85 @@ class ReadFileStg(StgBase):
                         tot_value += dic_sub['balance'] * self.symbol_latest_price_dic[
                             self.get_symbol_by_currency(currency)]
 
-            weight_vol = tot_value * weight / self.symbol_latest_price_dic[symbol]
-            gap_threshold_vol = tot_value * gap_threshold_precision / self.symbol_latest_price_dic[symbol]
+            price_latest = self.symbol_latest_price_dic[symbol]
+            weight_vol = tot_value * weight / price_latest
+            gap_threshold_vol = tot_value * gap_threshold_precision / price_latest
+            stop_loss_price = price_latest * (1 + stop_loss_rate)
 
-        return weight_vol, gap_threshold_vol
+        return weight_vol, gap_threshold_vol, stop_loss_price
 
     def get_target_position(self, symbol):
         dic = self.symbol_target_position_dic[symbol]
         return dic['direction'], dic['currency'], dic['position'], dic['symbol'], \
                dic['price'], dic['stop_loss_price'], dic.setdefault('has_stop_loss', False), \
                dic.setdefault('gap_threshold_vol', None)
+
+    def backup_feedback_files(self):
+        """
+        将所有的 feedback 文件备份
+        :return:
+        """
+        # 获取文件列表
+        file_name_list = os.listdir(self._folder_path)
+        if file_name_list is None:
+            # self.logger.info('No file')
+            return
+
+        for file_name in file_name_list:
+            # 仅处理 order*.csv文件
+            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is not None:
+                continue
+            file_base_name, file_extension = os.path.splitext(file_name)
+            file_path = os.path.join(self._folder_path, file_name)
+            # 文件备份
+            backup_file_name = f"{file_base_name} {datetime.now().strftime('%Y-%m-%d %H_%M_%S')}" \
+                               f"{file_extension}.bak"
+            os.rename(file_path, os.path.join(self._folder_path, backup_file_name))
+            self.logger.info('备份 Feedback 文件 %s -> %s', file_name, backup_file_name)
+
+    def create_feedback_file(self):
+        """
+        根据 symbol_target_position_dic 创建 feedback 文件
+        :return:
+        """
+        symbol_target_position_dic = self.symbol_target_position_dic
+        data_dic = {}
+        for key, val in symbol_target_position_dic.items():
+            val_dic = val.to_dict()
+            val_dic['direction'] = int(val_dic['direction'])
+            data_dic[key] = val_dic
+
+        backup_file_name = f"feedback_{datetime.now().strftime('%Y-%m-%d %H_%M_%S')}.json"
+        with open(backup_file_name, 'w') as file:
+            json.dump(data_dic, file)
+
+    def load_feedback_file(self):
+        """
+        加载 feedback 文件，更新 self.symbol_target_position_dic
+        :return:
+        """
+        # 获取文件列表
+        file_name_list = os.listdir(self._folder_path)
+        if file_name_list is None or len(file_name_list) == 0:
+            # self.logger.info('No file')
+            return
+        # 读取所有 csv 文件
+        for file_name in file_name_list[0]:
+            # 仅处理 order*.csv文件
+            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is not None:
+                continue
+            self.logger.debug('处理文件 %s', file_name)
+            file_path = os.path.join(self._folder_path, file_name)
+
+            with open(file_path) as file:
+                data_dic = json.load(file)
+            for key in data_dic.keys():
+                data_dic[key]['direction'] = Direction(data_dic[key]['direction'])
+            self.symbol_target_position_dic = data_dic
+            self.logger.info('加载 feedback 文件：%s', file_name)
+            break
+        else:
+            logging.info('没有可用的 feedback 文件可加载')
 
 
 if __name__ == '__main__':

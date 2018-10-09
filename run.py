@@ -12,7 +12,7 @@ import logging
 import time
 from abat.common import PeriodType, RunMode, BacktestTradeMode
 from abat.strategy import StgHandlerBase
-from strategy.file_order_against_market_price_deal import ReadFileStg
+from strategy.bs_against_files.csv_orders import ReadFileStg
 from strategy.simple_strategy import MACroseStg
 
 logger = logging.getLogger()

@@ -5,11 +5,11 @@ Created on 2017/6/9
 """
 import logging
 from logging.handlers import RotatingFileHandler
+
 logger = logging.getLogger()
 
 
 class ConfigBase:
-
     # 交易所名称
     MARKET_NAME = 'huobi'
 
@@ -38,13 +38,13 @@ class ConfigBase:
 
 
 class ConfigProduct(ConfigBase):
-
-    EXCHANGE_ACCESS_KEY = '****'
-    EXCHANGE_SECRET_KEY = '****'
+    # 测试子账户 key
+    EXCHANGE_ACCESS_KEY = '2b92d1c8-6a14ed48-fd875ed3-bff67'
+    EXCHANGE_SECRET_KEY = '074cb202-5fdf697f-6cc70741-6d5c8'
 
     DB_URL_DIC = {
-        ConfigBase.DB_SCHEMA_MD: 'mysql://mg:****@10.0.3.66/' + ConfigBase.DB_SCHEMA_MD,
-        ConfigBase.DB_SCHEMA_ABAT: 'mysql://mg:****@10.0.3.66/' + ConfigBase.DB_SCHEMA_ABAT,
+        ConfigBase.DB_SCHEMA_MD: 'mysql://mg:Dcba1234@10.0.3.66/' + ConfigBase.DB_SCHEMA_MD,
+        ConfigBase.DB_SCHEMA_ABAT: 'mysql://mg:Dcba1234@10.0.3.66/' + ConfigBase.DB_SCHEMA_ABAT,
     }
 
     # redis info
@@ -66,10 +66,10 @@ logging.basicConfig(level=logging.DEBUG, format=Config.LOG_FORMAT)
 logging.getLogger('requests.packages.urllib3.connectionpool').setLevel(logging.WARNING)
 logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
 logging.getLogger('EventAgent').setLevel(logging.INFO)
-
+logging.getLogger('StgBase').setLevel(logging.INFO)
 
 # 配置文件日至
-Rthandler = RotatingFileHandler('log.log', maxBytes=10*1024*1024,backupCount=5)
+Rthandler = RotatingFileHandler('log.log', maxBytes=10 * 1024 * 1024, backupCount=5)
 Rthandler.setLevel(logging.INFO)
 formatter = logging.Formatter(Config.LOG_FORMAT)
 Rthandler.setFormatter(formatter)
