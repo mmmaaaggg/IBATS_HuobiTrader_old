@@ -36,15 +36,15 @@ import agent.td_agent
 
 DEBUG = False
 # "TradeBookCryptoCurrency2018-10-08.csv"
-PATTERN_BACKTEST_FILE_NAME = re.compile(r'(?<=TradeBookCryptoCurrency)[\d\-]{8,10}(?=.csv)')
-PATTERN_ORDER_FILE_NAME = re.compile(r'order.*\.csv')
-PATTERN_FEEDBACK_FILE_NAME = re.compile(r'feedback.*\.json')
+PATTERN_BACKTEST_FILE_NAME = re.compile(r'(?<=^TradeBookCryptoCurrency)[\d\-]{8,10}(?=.csv$)')
+PATTERN_ORDER_FILE_NAME = re.compile(r'^order.*\.csv$')
+PATTERN_FEEDBACK_FILE_NAME = re.compile(r'^feedback.*\.json$')
 
 
 class TargetPosition:
 
     def __init__(self, direction: Direction, currency, position, symbol,
-                 price=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=None):
+                 price=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=0.01):
         self.direction = direction
         self.currency = currency
         self.position = position
@@ -78,12 +78,18 @@ class TargetPosition:
         return {attr: getattr(self, attr) for attr in dir(self)
                 if attr.find('_') != 0 and not callable(getattr(self, attr))}
 
+    def __repr__(self):
+        return f'<TargetPosition(symbol={self.symbol}, direction={int(self.direction)}, ' \
+               f'position={self.position}, price={self.price}, stop_loss_price={self.stop_loss_price}, ' \
+               f'has_stop_loss={self.has_stop_loss}, gap_threshold_vol={self.gap_threshold_vol})>'
+
 
 class ReadFileStg(StgBase):
     _folder_path = os.path.abspath(os.path.join(os.path.curdir, r'file_order'))
 
-    def __init__(self):
+    def __init__(self, symbol_list=None):
         super().__init__()
+        self.symbol_list = symbol_list
         self._mutex = threading.Lock()
         self._last_check_datetime = datetime.now() - timedelta(minutes=1)
         self.interval_timedelta = timedelta(seconds=15)
@@ -98,8 +104,9 @@ class ReadFileStg(StgBase):
         self.timedelta_between_deal = timedelta(seconds=3)
         self.min_order_vol = 0.1
         self.symbol_latest_price_dic = defaultdict(float)
-        self.weight = 1
+        self.weight = 1 if not DEBUG else 0.2  # 默认仓位权重
         self.stop_loss_rate = -0.03
+        self.logger.info('接受订单文件目录：%s', self._folder_path)
         self.load_feedback_file()
 
     def fetch_pos_by_file(self):
@@ -117,9 +124,9 @@ class ReadFileStg(StgBase):
         file_path_list = []
         for file_name in file_name_list:
             # 仅处理 order*.csv文件
-            if PATTERN_ORDER_FILE_NAME.search(file_name) is not None:
+            if PATTERN_ORDER_FILE_NAME.search(file_name) is None:
                 continue
-            self.logger.debug('处理文件 %s', file_name)
+            self.logger.debug('处理文件 order 文件： %s', file_name)
             file_base_name, file_extension = os.path.splitext(file_name)
             file_path = os.path.join(self._folder_path, file_name)
             file_path_list.append(file_path)
@@ -128,7 +135,7 @@ class ReadFileStg(StgBase):
                 position_df = position_df_tmp
             else:
                 is_ok = True
-                for col_name in ('currency', 'symbol', 'weight', 'stop_loss_price'):
+                for col_name in ('currency', 'symbol', 'weight', 'stop_loss_rate'):
                     if col_name not in position_df_tmp.columns:
                         is_ok = False
                         self.logger.error('%s 文件格式不正确，缺少 %s 列数据', file_name, col_name)
@@ -164,7 +171,7 @@ class ReadFileStg(StgBase):
                 file_base_name, file_extension = os.path.splitext(file_name)
                 # 仅处理 order*.csv文件
                 m = PATTERN_BACKTEST_FILE_NAME.search(file_name)
-                if m is not None:
+                if m is None:
                     continue
                 file_date_str = m.group()
                 file_date = str_2_date(file_date_str)
@@ -232,8 +239,8 @@ class ReadFileStg(StgBase):
                 if currency in target_currency_set:
                     continue
                 # hc 为 货币交易所的一种手续费代币工具，不做交易使用
-                if currency == 'hc':
-                    continue
+                # if currency == 'hc':
+                #     continue
                 # 若持仓余额 小于 0.0001 则放弃清仓
                 tot_balance = 0
                 for _, dic in balance_dic.items():
@@ -242,7 +249,15 @@ class ReadFileStg(StgBase):
                     continue
 
                 symbol = self.get_symbol_by_currency(currency)
-                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, 0, symbol)
+                if symbol_list is not None and symbol not in symbol_list:
+                    self.logger.warning('%s 持仓： %.6f 不在当前订阅列表中，也不在目标持仓中，该持仓将不会被操作',
+                                        symbol, tot_balance)
+                    continue
+                self.logger.info('计划卖出 %s', symbol)
+                # TODO: 最小下单量在数据库中有对应信息，有待改进
+                gap_threshold_vol = 0.1
+                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, 0, symbol,
+                                                                    gap_threshold_vol=gap_threshold_vol)
                 is_all_fit_target = False
 
             # 生成目标持仓列表买入指令
@@ -270,13 +285,17 @@ class ReadFileStg(StgBase):
                 # 无论仓位是否存在，均生成交易指令，待交易执行阶段进行比较（以上代码不影响是否生产建仓指令）
 
                 # 多头目标持仓
+                self.logger.info('计划买入 %s 目标仓位：%f 止损价：%f', symbol, target_vol, stop_loss_price)
                 symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, target_vol, symbol,
                                                                     None, stop_loss_price,
                                                                     gap_threshold_vol=gap_threshold_vol)
 
-            if len(symbol_target_position_dic) > 0:
+            symbol_target_position_dic_len = len(symbol_target_position_dic)
+            if symbol_target_position_dic_len > 0:
                 self.symbol_target_position_dic = symbol_target_position_dic
-                self.logger.info('发现新的目标持仓指令\n%s', symbol_target_position_dic)
+                self.logger.info('发现新的目标持仓指令：')
+                for num, (key, val) in enumerate(symbol_target_position_dic.items()):
+                    self.logger.info('%d/%d) %s, %r', num, symbol_target_position_dic_len, key, val)
                 # 生成 feedback 文件
                 self.create_feedback_file()
             else:
@@ -311,12 +330,13 @@ class ReadFileStg(StgBase):
                     price = md_dic['close']
                     # TODO: 稍后按盘口卖一档价格挂单
 
-                if DEBUG:
-                    # debug 模式下，价格不要真实成交，只要看一下有委托单就可以了
-                    price /= 2
+                # if DEBUG:
+                #     # debug 模式下，价格不要真实成交，只要看一下有委托单就可以了
+                #     price /= 2
 
                 if stop_loss_price is not None and stop_loss_price > 0 and price <= stop_loss_price:
-                    self.logger.warning('已经出发止损价 %.6f 停止买入操作', stop_loss_price)
+                    self.logger.warning('%s 当前价格 %.6f 已经触发止损价 %.6f 停止买入操作',
+                                        instrument_id, price, stop_loss_price)
                     return
 
                 self.open_long(instrument_id, price, order_vol)
@@ -326,9 +346,9 @@ class ReadFileStg(StgBase):
                     price = md_dic['close']
                     # TODO: 稍后按盘口卖一档价格挂单
 
-                if DEBUG:
-                    # debug 模式下，价格不要真实成交，只要看一下有委托单就可以了
-                    price += price
+                # if DEBUG:
+                #     # debug 模式下，价格不要真实成交，只要看一下有委托单就可以了
+                #     price += price
 
                 order_vol_net = -order_vol
                 self.close_long(instrument_id, price, order_vol_net)
@@ -353,6 +373,7 @@ class ReadFileStg(StgBase):
         if self.symbol_target_position_dic is None or symbol not in self.symbol_target_position_dic:
             return
         if self.datetime_last_update_position is None:
+
             logging.debug("尚未获取持仓数据，跳过")
             return
 
@@ -403,7 +424,7 @@ class ReadFileStg(StgBase):
 
                 position_holding = sum(
                     [pos_info_dic['balance'] for pos_info_dic in position_date_pos_info_dic.values()])
-                self.logger.debug('当前 %s 持仓 %f', target_position.currency, position_holding)
+                self.logger.debug('当前 %s 持仓 %f 价格 %.6f', target_position.currency, position_holding, close_cur)
                 # 比较当前持仓总量与目标仓位是否一致
                 # 如果当前有持仓，目标仓位也有持仓，则需要进一步比对
                 # target_direction, target_currency, target_position, symbol, target_price, \
@@ -447,7 +468,7 @@ class ReadFileStg(StgBase):
 
     def calc_vol_and_stop_loss_price(self, symbol, weight, stop_loss_rate=None, gap_threshold_precision=0.01):
         """
-        根据权重及当前账号总市值，计算当前 symbol 对应多少 vol, 根据 stop_loss_rate 计算止损价格
+        根据权重及当前账号总市值，计算当前 symbol 对应多少 vol, 根据 stop_loss_rate 计算止损价格(目前仅考虑做多的情况)
         :param symbol:
         :param weight:
         :param stop_loss_rate:
@@ -497,8 +518,8 @@ class ReadFileStg(StgBase):
             return
 
         for file_name in file_name_list:
-            # 仅处理 order*.csv文件
-            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is not None:
+            # 仅处理 feedback*.csv文件
+            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is None:
                 continue
             file_base_name, file_extension = os.path.splitext(file_name)
             file_path = os.path.join(self._folder_path, file_name)
@@ -520,9 +541,12 @@ class ReadFileStg(StgBase):
             val_dic['direction'] = int(val_dic['direction'])
             data_dic[key] = val_dic
 
-        backup_file_name = f"feedback_{datetime.now().strftime('%Y-%m-%d %H_%M_%S')}.json"
-        with open(backup_file_name, 'w') as file:
+        file_name = f"feedback_{datetime.now().strftime('%Y-%m-%d %H_%M_%S')}.json"
+        file_path = os.path.join(self._folder_path, file_name)
+        with open(file_path, 'w') as file:
             json.dump(data_dic, file)
+        self.logger.info('生产 feedback 文件：%s', file_name)
+        return file_path
 
     def load_feedback_file(self):
         """
@@ -535,11 +559,11 @@ class ReadFileStg(StgBase):
             # self.logger.info('No file')
             return
         # 读取所有 csv 文件
-        for file_name in file_name_list[0]:
+        for file_name in file_name_list:
             # 仅处理 order*.csv文件
-            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is not None:
+            if PATTERN_FEEDBACK_FILE_NAME.search(file_name) is None:
                 continue
-            self.logger.debug('处理文件 %s', file_name)
+            self.logger.debug('处理文件 feedback文件： %s', file_name)
             file_path = os.path.join(self._folder_path, file_name)
 
             with open(file_path) as file:
@@ -556,8 +580,9 @@ class ReadFileStg(StgBase):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG, format=Config.LOG_FORMAT)
     DEBUG = False
+    symbol_list = ['ethusdt', 'eosusdt']
     # 参数设置
-    strategy_params = {}
+    strategy_params = {'symbol_list': symbol_list}
     md_agent_params_list = [
         # {
         #     'name': 'min1',
@@ -569,7 +594,7 @@ if __name__ == '__main__':
         {
             'name': 'tick',
             'md_period': PeriodType.Tick,
-            'instrument_id_list': ['ethusdt', 'eosusdt'],  #
+            'instrument_id_list': symbol_list,  #
         }]
     run_mode_realtime_params = {
         'run_mode': RunMode.Realtime,
@@ -596,7 +621,7 @@ if __name__ == '__main__':
         # 开始执行策略
         stghandler.start()
         # 策略执行 2 分钟后关闭
-        time.sleep(120)
+        time.sleep(180)
         stghandler.keep_running = False
         stghandler.join()
 
