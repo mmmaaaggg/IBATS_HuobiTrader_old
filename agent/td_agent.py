@@ -365,7 +365,7 @@ class RealTimeTraderAgent(TraderAgent):
             price = format(price, f'.{price_precision}f')
         if isinstance(vol, float):
             if vol < 10 ** -amount_precision:
-                logger.warning('%s 订单量 %f 太小，忽略')
+                logger.warning('%s open_long 订单量 %f 太小，忽略', symbol, vol)
                 return
             vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.buy_limit.value, price)
@@ -378,7 +378,7 @@ class RealTimeTraderAgent(TraderAgent):
             price = format(price, f'.{price_precision}f')
         if isinstance(vol, float):
             if vol < 10 ** -amount_precision:
-                logger.warning('%s 订单量 %f 太小，忽略')
+                logger.warning('%s close_long 订单量 %f 太小，忽略', symbol, vol)
                 return
             vol = format(floor(vol, amount_precision), f'.{amount_precision}f')
         self.trader_api.send_order(vol, symbol, OrderType.sell_limit.value, price)
