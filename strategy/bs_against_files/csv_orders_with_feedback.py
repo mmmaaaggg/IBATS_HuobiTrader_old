@@ -266,7 +266,8 @@ class ReadFileStg(StgBase):
                 stop_loss_rate = position_dic['stop_loss_rate']
                 # stop_loss_price = position_dic['stop_loss_rate']
                 symbol = self.get_symbol_by_currency(currency)
-                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(symbol, weight, stop_loss_rate)
+                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(symbol, weight,
+                                                                                                   stop_loss_rate)
                 if target_vol is None:
                     self.logger.warning('%s 持仓权重 %.2f %% 无法计算目标持仓量', currency, weight * 100)
                     continue
@@ -386,21 +387,28 @@ class ReadFileStg(StgBase):
             self.logger.debug("尚未获取持仓数据，跳过")
             return
 
-        target_currency = self.trade_agent.get_currency(symbol)
+        target_position = self.symbol_target_position_dic[symbol]
+        # target_currency = self.trade_agent.get_currency(symbol)
+        target_currency = target_position.currency
         # self.logger.debug('target_position_dic[%s]: %s', symbol, self.target_position_dic[symbol])
         # 如果的当前合约近期存在交易回报，则交易回报时间一定要小于查询持仓时间：
         # 防止出现以及成交单持仓信息未及时更新导致的数据不同步问题
         if symbol in self.datetime_last_rtn_trade_dic:
             if target_currency not in self.datetime_last_update_position_dic:
-                logging.debug("持仓数据中没有包含当前合约，最近一次成交回报时间：%s，跳过",
-                              self.datetime_last_rtn_trade_dic[symbol])
+                self.logger.debug("%s 持仓数据中没有包含当前合约，最近一次成交回报时间：%s，跳过",
+                                  target_currency, self.datetime_last_rtn_trade_dic[symbol])
                 self.get_position(symbol, force_refresh=True)
+                # 此处可以不 return 因为当前火币交易所接口是同步返回持仓结果的
+                # 不过为了兼容其他交易所，因此统一使用这种方式
                 return
             if self.datetime_last_rtn_trade_dic[symbol] > self.datetime_last_update_position_dic[target_currency]:
-                logging.debug("持仓数据尚未更新完成，最近一次成交回报时间：%s 晚于 最近一次持仓更新时间：%s",
-                              self.datetime_last_rtn_trade_dic[symbol],
-                              self.datetime_last_update_position_dic[target_currency])
+                self.logger.debug("%s 持仓数据尚未更新完成，最近一次成交回报时间：%s > 最近一次持仓更新时间：%s",
+                                  target_currency,
+                                  self.datetime_last_rtn_trade_dic[symbol],
+                                  self.datetime_last_update_position_dic[target_currency])
                 self.get_position(symbol, force_refresh=True)
+                # 此处可以不 return 因为当前火币交易所接口是同步返回持仓结果的
+                # 不过为了兼容其他交易所，因此统一使用这种方式
                 return
 
         # 过于密集执行可能会导致重复下单的问题
@@ -411,7 +419,6 @@ class ReadFileStg(StgBase):
                 return
 
         with self._mutex:
-            target_position = self.symbol_target_position_dic[symbol]
             target_position.check_stop_loss(close_cur)
             # self.logger.debug("当前持仓目标：%r", target_position)
             # 撤销所有相关订单
@@ -433,15 +440,21 @@ class ReadFileStg(StgBase):
 
                 position_holding = sum(
                     [pos_info_dic['balance'] for pos_info_dic in position_date_pos_info_dic.values()])
-                self.logger.debug('当前 %s 持仓 %f 价格 %.6f', target_position.currency, position_holding, close_cur)
                 # 比较当前持仓总量与目标仓位是否一致
                 # 如果当前有持仓，目标仓位也有持仓，则需要进一步比对
                 # target_direction, target_currency, target_position, symbol, target_price, \
                 # stop_loss_price, has_stop_loss, gap_threshold_vol = self.get_target_position(symbol)
                 if target_position.has_stop_loss:
-                    # 已经触发止损，如果依然有持仓，则进行持续清仓操作
-                    self.do_order(md_dic, symbol, -position_holding, None,
-                                  target_position.direction, msg="止损")
+                    if position_holding <= target_position.gap_threshold_vol:
+                        self.logger.debug('当前 %s 持仓 %f -> %f 价格 %.6f 已处于止损状态，剩余仓位低于阀值 %f 无需进一步清仓',
+                                          target_currency, position_holding, target_position.position, close_cur,
+                                          target_position.gap_threshold_vol)
+                    else:
+                        self.logger.debug('当前 %s 持仓 %f -> %f 价格 %.6f 已处于止损状态',
+                                          target_currency, position_holding, target_position.position, close_cur)
+                        # 已经触发止损，如果依然有持仓，则进行持续清仓操作
+                        self.do_order(md_dic, symbol, -position_holding, None,
+                                      target_position.direction, msg="止损")
                 else:
                     # 汇总全部同方向持仓，如果不够目标仓位，则加仓
                     # 对全部的反方向持仓进行平仓
@@ -454,6 +467,8 @@ class ReadFileStg(StgBase):
                         else:
                             msg = "补充仓位"
                         # 如果不足则补充多的部分
+                        self.logger.debug('当前 %s 持仓 %f -> %f 价格 %.6f %s',
+                                          target_currency, position_holding, target_position.position, close_cur, msg)
                         self.do_order(md_dic, symbol, position_gap, target_position.price,
                                       target_position.direction, target_position.stop_loss_price, msg=msg)
                     elif position_gap < - target_position.gap_threshold_vol:
@@ -462,11 +477,13 @@ class ReadFileStg(StgBase):
                         else:
                             msg = "持仓超过目标仓位，减仓 %.4f" % position_gap
                         # 如果持仓超过目标仓位，则平仓多出的部分
+                        self.logger.debug('当前 %s 持仓 %f -> %f 价格 %.6f %s',
+                                          target_currency, position_holding, target_position.position, close_cur, msg)
                         self.do_order(md_dic, symbol, position_gap, target_position.price,
                                       target_position.direction, target_position.stop_loss_price, msg=msg)
                     else:
-                        self.logger.debug('当前持仓 %f 与目标持仓%f 差距 %f 过小，忽略此调整',
-                                          position_holding, target_position.position, position_gap)
+                        self.logger.debug('当前 %s 持仓 %f -> %f 差距 %f 过小，忽略此调整',
+                                          target_currency, position_holding, target_position.position, position_gap)
 
         # 更新最近执行时间
         self.symbol_last_deal_datetime[symbol] = datetime.now()
