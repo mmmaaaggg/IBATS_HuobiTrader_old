@@ -431,6 +431,7 @@ class RealTimeTraderAgent(TraderAgent):
                 self.currency_balance_last_get_datetime < datetime.now() - timedelta(seconds=30):
             ret_data = self.trader_api.get_balance()
             acc_balance = ret_data['data']['list']
+            self.logger.debug('更新持仓数据： %d 条', len(acc_balance))
             acc_balance_new_dic = defaultdict(dict)
             for balance_dic in acc_balance:
                 currency_curr = balance_dic['currency']
@@ -442,6 +443,7 @@ class RealTimeTraderAgent(TraderAgent):
                 if trade_type_only and balance_dic['type'] != 'trade':
                     continue
                 balance_dic['balance'] = float(balance_dic['balance'])
+                # self.logger.debug(balance_dic)
                 if PositionDateType.History in acc_balance_new_dic[currency_curr]:
                     balance_dic_old = acc_balance_new_dic[currency_curr][PositionDateType.History]
                     balance_dic_old['balance'] += balance_dic['balance']

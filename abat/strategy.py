@@ -307,14 +307,14 @@ class StgHandlerBase(Thread, ABC):
             md_period_agent_dic[period] = md_agent
             # 对各个周期分别加载历史数据，设置对应 handler
             # 通过 md_agent 加载各个周期的历史数据
-            md_df = md_agent.load_history()
-            if md_df is None:
+            his_df_dic = md_agent.load_history()
+            if his_df_dic is None:
                 StgHandlerBase.logger.warning('加载 %s 历史数据为 None', period)
                 continue
-            if isinstance(md_df, dict):
-                his_df_dic = md_df
+            if isinstance(his_df_dic, dict):
                 md_df = his_df_dic['md_df']
             else:
+                md_df = his_df_dic
                 warnings.warn('load_history 返回 df 数据格式即将废弃，请更新成 dict', DeprecationWarning)
 
             context = {ContextKey.instrument_id_list: list(md_agent.instrument_id_set)}
