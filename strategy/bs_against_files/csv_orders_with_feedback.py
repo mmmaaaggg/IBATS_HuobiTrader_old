@@ -294,13 +294,21 @@ class ReadFileStg(StgBase):
             if symbol_target_position_dic_len > 0:
                 self.symbol_target_position_dic = symbol_target_position_dic
                 self.logger.info('发现新的目标持仓指令：')
-                for num, (key, val) in enumerate(symbol_target_position_dic.items()):
-                    self.logger.info('%d/%d) %s, %r', num, symbol_target_position_dic_len, key, val)
+                self.logger_symbol_target_position_dic()
                 # 生成 feedback 文件
                 self.create_feedback_file()
             else:
                 self.symbol_target_position_dic = None
                 self.logger.debug('无仓位调整指令')
+
+    def logger_symbol_target_position_dic(self):
+        """
+        展示当前目标持仓信息
+        :return:
+        """
+        symbol_target_position_dic_len = len(self.symbol_target_position_dic)
+        for num, (key, val) in enumerate(self.symbol_target_position_dic.items()):
+            self.logger.info('%d/%d) %s, %r', num, symbol_target_position_dic_len, key, val)
 
     def on_timer(self):
         """
@@ -311,6 +319,7 @@ class ReadFileStg(StgBase):
         :param context: 
         :return: 
         """
+        self.get_balance()
         self.handle_backtest_file()
         self.handle_order_file()
 
@@ -371,10 +380,10 @@ class ReadFileStg(StgBase):
         self.symbol_latest_price_dic[symbol] = close_cur
         # 计算是否需要进行调仓操作
         if self.symbol_target_position_dic is None or symbol not in self.symbol_target_position_dic:
+            # self.logger.debug("当前 symbol='%s' 无操作", symbol)
             return
         if self.datetime_last_update_position is None:
-
-            logging.debug("尚未获取持仓数据，跳过")
+            self.logger.debug("尚未获取持仓数据，跳过")
             return
 
         target_currency = self.trade_agent.get_currency(symbol)
@@ -404,7 +413,7 @@ class ReadFileStg(StgBase):
         with self._mutex:
             target_position = self.symbol_target_position_dic[symbol]
             target_position.check_stop_loss(close_cur)
-
+            # self.logger.debug("当前持仓目标：%r", target_position)
             # 撤销所有相关订单
             self.cancel_order(symbol)
 
@@ -568,10 +577,15 @@ class ReadFileStg(StgBase):
 
             with open(file_path) as file:
                 data_dic = json.load(file)
-            for key in data_dic.keys():
-                data_dic[key]['direction'] = Direction(data_dic[key]['direction'])
-            self.symbol_target_position_dic = data_dic
+            # 构建 symbol_target_position_dic 对象
+            symbol_target_position_dic = {}
+            for key, val in data_dic.items():
+                val['direction'] = Direction(val['direction'])
+                symbol_target_position_dic[key] = TargetPosition(**val)
+
+            self.symbol_target_position_dic = symbol_target_position_dic
             self.logger.info('加载 feedback 文件：%s', file_name)
+            self.logger_symbol_target_position_dic()
             break
         else:
             logging.info('没有可用的 feedback 文件可加载')
