@@ -24,7 +24,12 @@ promt_str = '输入对应数字选择执行策略：\n' + \
 
 @click.command()
 @click.option('--num', type=click.IntRange(0, len(strategy_list) - 1), prompt=promt_str)
-def main(num):
+@click.option('--init', type=click.BOOL, default=False)
+def main(num, init):
+    if init:
+        from abat.backend.orm import init
+        init()
+
     stg_func = strategy_list[num]
 
     DEBUG = False
@@ -82,12 +87,5 @@ def main(num):
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        if sys.argv[1] == 'init':
-            from abat.backend.orm import init
-            init()
-        else:
-            raise KeyError('param %s not supported', sys.argv[1])
-    else:
-        main(standalone_mode=False)
+
+    main(standalone_mode=False)
