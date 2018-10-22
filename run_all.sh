@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 screen_name="worker"
 echo create $screen_name
 screen -dmS $screen_name
