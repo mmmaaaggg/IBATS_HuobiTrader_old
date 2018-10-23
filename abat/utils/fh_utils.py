@@ -1,7 +1,11 @@
+#! /usr/bin/env python
 # -*- coding:utf-8 -*-
 """
-Created on 2016-12-22
-@author: MG
+@author  : MG
+@Time    : 2016/12/12 14:47
+@File    : mess.py
+@contact : mmmaaaggg@163.com
+@desc    :
 """
 import os
 import time
@@ -20,6 +24,7 @@ from functools import reduce
 import xlrd
 import math
 
+logger = logging.getLogger(__name__)
 STR_FORMAT_DATE = '%Y-%m-%d'
 STR_FORMAT_DATETIME = '%Y-%m-%d %H:%M:%S'
 STR_FORMAT_DATETIME2 = '%Y-%m-%d %H:%M:%S.%f'
@@ -43,6 +48,71 @@ def ceil(x, precision=0):
         return math.ceil(x * (10 ** precision)) / (10 ** precision)
 
 
+def is_any(iterable, func):
+    """
+    查找是否存在任何一个为True的结果，否则返回False
+    :param iterable:
+    :param func:
+    :return:
+    """
+    for x in iterable:
+        if func(x):
+            return True
+    else:
+        return False
+
+
+def is_not_nan_or_none(x):
+    """
+    判断是否不是 NAN 或 None
+    :param x:
+    :return:
+    """
+    return False if x is None else not((isinstance(x, float) and np.isnan(x)) or isinstance(x, pd.tslib.NaTType))
+
+
+def is_nan_or_none(x):
+    """
+    判断是否是 NAN 或 None
+    :param x:
+    :return:
+    """
+    return True if x is None else (isinstance(x, float) and np.isnan(x)) or isinstance(x, pd.tslib.NaTType)
+
+
+def try_2_float(data):
+    try:
+        return None if data is None else float(data)
+    except:
+        logger.exception('%s 转化失败', data)
+        return None
+
+
+def split_chunk(l: list, n: int):
+    """
+    将数组按照给定长度进行分割
+    :param l:
+    :param n:
+    :return:
+    """
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
+
+
+def zip_split(*args, sep=','):
+    """
+    将多个字符串，按照 sep 分割对齐，形成元祖数组
+    :param args: [str1, str2, ...]
+    :param sep: 默认 ,
+    :return:
+    """
+    return list(zip(*[arg.split(sep=sep) for arg in args]))
+
+
+def unzip_join(tuple_list, sep=','):
+    return (sep.join(arg) for arg in zip(*tuple_list))
+
+
 def populate_obj(model_obj, data_dic: dict, attr_list=None, error_if_no_key=False):
     """
     通过 dict 设置模型对应的属性
@@ -61,12 +131,37 @@ def populate_obj(model_obj, data_dic: dict, attr_list=None, error_if_no_key=Fals
             warnings.warn("data_dic 缺少 '%s' key 无法设置到 %s" % (name, model_obj.__class__.__name__))
 
 
-def try_n_times(times=3, sleep_time=3, logger: logging.Logger=None):
+def log_param_when_exception(func):
+
+    @functools.wraps(func)
+    def handler(*arg, **kwargs):
+        try:
+            return func(*arg, **kwargs)
+        except Exception as exp:
+            msg = '%s(%s, %s)' % (
+                func.__name__,
+                ', '.join([str(v) for v in arg]),
+                ', '.join(
+                    ['{key}={value}'.format(key=str(key), value=str(value))
+                     for key, value in kwargs.items()]
+                )
+            )
+            logger.exception(msg)
+            raise exp from exp
+
+    return handler
+
+
+def try_n_times(times=3, sleep_time=3, logger: logging.Logger=None,
+                exception=Exception, exception_sleep_time=0,
+                exception_exclusion_set=None):
     """
     尝试最多 times 次，异常捕获记录后继续尝试
     :param times:
     :param sleep_time:
     :param logger: 如果异常需要 log 记录则传入参数
+    :param exception: 可用于捕获指定异常，默认 Exception
+    :param exception_sleep_time: 当出现异常情况下，sleep n 秒
     :return:
     """
     last_invoked_time = [None]
@@ -82,9 +177,15 @@ def try_n_times(times=3, sleep_time=3, logger: logging.Logger=None):
 
                 try:
                     ret_data = func(*arg, **kwargs)
-                except:
+                except exception as exp:
                     if logger is not None:
-                        logger.exception("第 %d 次调用 %s 出错", n, func.__name__)
+                        logger.exception("第 %d 次调用 %s(%s, %s) 出错", n, func.__name__, arg, kwargs)
+                    if exception_exclusion_set is not None:
+                        for exp_ex in exception_exclusion_set:
+                            if isinstance(exp, exp_ex):
+                                raise exp from exp
+                    if exception_sleep_time is not None and exception_sleep_time > 0:
+                        time.sleep(exception_sleep_time)
                     continue
                 finally:
                     last_invoked_time[0] = time.time()
@@ -100,9 +201,10 @@ def try_n_times(times=3, sleep_time=3, logger: logging.Logger=None):
     return wrap_func
 
 
-def date_2_str(dt):
+def date_2_str(dt, format=STR_FORMAT_DATE):
+    """将日期类型转换为字符串"""
     if dt is not None and type(dt) in (date, datetime, Timestamp):
-        dt_str = dt.strftime(STR_FORMAT_DATE)
+        dt_str = dt.strftime(format)
     else:
         dt_str = dt
     return dt_str
@@ -111,9 +213,27 @@ def date_2_str(dt):
 def datetime_2_str(dt, format=STR_FORMAT_DATETIME):
     if dt is not None and type(dt) in (date, datetime, Timestamp):
         dt_str = dt.strftime(format)
+        # print(type(dt), '->', dt_str)
+    elif isinstance(dt, pd.core.indexes.datetimes.DatetimeIndex):
+        dt_str = [x.strftime(STR_FORMAT_DATETIME) for x in dt]
+        # print(type(dt), '-->', dt_str)
     else:
         dt_str = dt
+        # print(type(dt), '没有转换', dt)
     return dt_str
+
+
+def str_2_datetime(datetime_str, format=STR_FORMAT_DATETIME):
+    if datetime_str is not None:
+        if type(datetime_str) == str:
+            date_ret = datetime.strptime(datetime_str, format)
+        elif type(datetime_str) in (Timestamp, datetime):
+            date_ret = datetime_str
+        else:
+            date_ret = datetime_str
+    else:
+        date_ret = datetime_str
+    return date_ret
 
 
 def str_2_bytes(input_str):
@@ -369,6 +489,25 @@ def get_df_between_date(data_df, date_frm, date_to):
     return new_data_df
 
 
+def _get_df_between_date_by_index(data_df, date_frm, date_to):
+    """
+    该函数仅用于 return_risk_analysis 中计算使用
+    :param data_df:
+    :param date_frm:
+    :param date_to:
+    :return:
+    """
+    if date_frm is not None and date_to is not None:
+        new_data_df = data_df[(data_df.index >= date_frm) & (data_df.index <= date_to)]
+    elif date_frm is not None:
+        new_data_df = data_df[data_df.index >= date_frm]
+    elif date_to is not None:
+        new_data_df = data_df[data_df.index <= date_to]
+    else:
+        new_data_df = data_df
+    return new_data_df
+
+
 def return_risk_analysis_old(nav_df: pd.DataFrame, date_frm=None, date_to=None, freq='weekly', rf=0.02):
     """
     按列统计 rr_df 收益率绩效
@@ -509,6 +648,175 @@ def return_risk_analysis_old(nav_df: pd.DataFrame, date_frm=None, date_to=None, 
     stat_df = pd.DataFrame(stat_dic_dic)
     stat_df = stat_df.ix[list(stat_dic.keys())]
     return stat_df
+
+
+def calc_performance(nav_df: pd.DataFrame, date_frm=None, date_to=None, freq='weekly', rf=0.02, suffix_name=None):
+    """
+    按列统计 rr_df 收益率绩效
+    :param nav_df: 收益率DataFrame，index为日期，每一列为一个产品的净值走势
+    :param date_frm: 统计日期区间，可以为空
+    :param date_to: 统计日期区间，可以为空
+    :param freq: None 自动识别, 'daily' 'weekly' 'monthly'
+    :param rf: 无风险收益率，默认 0.02
+    :return:
+    """
+    nav_sorted_df = nav_df.copy()
+    nav_sorted_df.index = [try_2_date(idx) for idx in nav_sorted_df.index]
+    nav_sorted_df.sort_index(inplace=True)
+    # 计算数据实际频率是日频、周频、月頻
+    data_count = nav_sorted_df.shape[0]
+    day_per_data = (nav_sorted_df.index[data_count - 1] - nav_sorted_df.index[0]).days / data_count
+    if day_per_data <= 0.008:
+        freq_real = 'minute'
+    elif day_per_data <= 0.2:
+        freq_real = 'hour'
+    elif day_per_data <= 2:
+        freq_real = 'daily'
+    elif day_per_data <= 10:
+        freq_real = 'weekly'
+    else:
+        freq_real = 'monthly'
+    if freq is None:
+        freq = freq_real
+    elif freq != freq_real:
+        warnings_msg = "data freq wrong, expect %s, but %s was detected" % (freq, freq_real)
+        # warnings.warn(warnings_msg)
+        # logging.warning(warnings_msg)
+        raise ValueError(warnings_msg)
+
+    freq_str = ''
+    if freq == 'weekly':
+        data_count_per_year = 50
+        freq_str = '周'
+    elif freq == 'monthly':
+        data_count_per_year = 12
+        freq_str = '月'
+    elif freq == 'daily':
+        data_count_per_year = 250
+        freq_str = '日'
+    elif freq == 'hour':
+        data_count_per_year = 1250
+        freq_str = '时'
+    elif freq == 'minute':
+        data_count_per_year = 75000
+        freq_str = '分'
+    else:
+        raise ValueError('freq=%s 只接受 daily weekly monthly 三种之一', freq)
+    stat_dic_dic = OrderedDict()
+    if type(date_frm) is str:
+        date_frm = datetime.strptime(date_frm, '%Y-%m-%d').date()
+    if type(date_to) is str:
+        date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    col_name_list = list(nav_sorted_df.columns)
+    # date_col_name = col_name_list[0]
+    # col_name_list = col_name_list[1:]
+    for col_name in col_name_list:
+        data_sub_df = nav_sorted_df[[col_name]].dropna()
+        if data_sub_df.shape[0] == 0:
+            continue
+        # rr_df = (1 + data_sub_df.pct_change().fillna(0)).cumprod()
+        # rr_df.index = [try_2_date(d) for d in rr_df.index]
+        # data_df = rr_df.reset_index()
+        # data_df.columns = ['Date', 'Value']
+        # 2018-07-01 不再重置索引，index为日期字段
+        data_df = _get_df_between_date_by_index(data_sub_df, date_frm, date_to)
+        data_df.columns = ['Value']
+        rr_df = data_df.Value.pct_change().fillna(0)
+        data_df.Value = (1 + rr_df).cumprod()
+        data_df['ret'] = rr_df
+        date_list = list(data_df.index)
+        date_latest = date_list[-1]
+        nav_latest = data_df.Value.loc[date_latest]
+        # 计算 近7天，近30天，近365天收益率
+        date_week_ago = date_latest - timedelta(days=7)
+        date_month_ago = date_latest - timedelta(days=30)
+        date_year_ago = date_latest - timedelta(days=365)
+        date_week_ago = get_last(date_list, lambda x: x <= date_week_ago)
+        date_month_ago = get_last(date_list, lambda x: x <= date_month_ago)
+        date_year_ago = get_last(date_list, lambda x: x <= date_year_ago)
+        rr_week = (nav_latest / data_df.Value.loc[date_week_ago] - 1) if date_week_ago is not None else None
+        rr_month = (nav_latest / data_df.Value.loc[date_month_ago] - 1) if date_month_ago is not None else None
+        rr_year = (nav_latest / data_df.Value.loc[date_year_ago] - 1) if date_year_ago is not None else None
+
+        # 计算时间跨度
+        date_span = date_list[-1] - date_list[0]
+        date_span_fraction = 365 / date_span.days if date_span.days > 0 else 1
+        # basic indicators
+        CAGR = data_df.Value[date_latest] ** date_span_fraction - 1
+        # 相当于余额宝倍数
+        times_yeb = (CAGR - 1) / 0.03
+        rr_tot = data_df.Value[date_latest] - 1
+        ann_vol = np.std(data_df.ret, ddof=1) * np.sqrt(data_count_per_year)
+        down_side_vol = np.std(data_df.ret[data_df.ret < 0], ddof=1) * np.sqrt(data_count_per_year)
+        # WeeksNum = data.shape[0]
+        profit_loss_ratio = -np.mean(data_df.ret[data_df.ret > 0]) / np.mean(data_df.ret[data_df.ret < 0])
+        win_ratio = len(data_df.ret[data_df.ret >= 0]) / len(data_df.ret)
+        min_value = min(data_df.Value)
+        final_value = data_df.Value[data_df.index[-1]]
+        max_ret = max(data_df.ret)
+        min_ret = min(data_df.ret)
+        # End of basic indicators
+        # max dropdown related
+        data_df['mdd'] = data_df.Value / data_df.Value.cummax() - 1
+        mdd_size = min(data_df.mdd)
+        droparray = pd.Series(data_df.index[data_df.mdd == 0])
+        if len(droparray) == 1:
+            mdd_max_period = len(data_df.mdd)
+        else:
+            if float(data_df.Value[droparray.tail(1)]) > float(data_df.Value.tail(1)):
+                droparray = droparray.append(pd.Series(data_df.index[-1]))  # , ignore_index=True
+            mdd_max_period = max(droparray.diff().dropna()).days - 1
+        # End of max dropdown related
+        # High level indicators
+        sharpe_ratio = (CAGR - rf) / ann_vol
+        sortino_ratio = (CAGR - rf) / down_side_vol
+        calmar_ratio = CAGR / (-mdd_size)
+        #  Natural month return
+        j = 1
+        for i, (date_4_df_idx, item) in enumerate(data_df.T.items()):
+            if i == 0:
+                month_ret = pd.DataFrame([[date_4_df_idx, item.Value]], columns=('Date', 'Value'))
+            else:
+                date_last_4_last = data_df.index[i - 1]
+                if date_4_df_idx.month != date_last_4_last.month:
+                    month_ret.loc[j] = [date_last_4_last, data_df.Value[date_last_4_last]]
+                    j += 1
+
+        month_ret.loc[j] = [date_latest, nav_latest]
+        month_ret['ret'] = month_ret.Value.pct_change().fillna(0)
+        max_rr_month = max(month_ret.ret)
+        min_rr_month = min(month_ret.ret)
+        # End of Natural month return
+        date_begin = date_list[0]  # .date()
+        date_end = date_list[-1]
+        stat_dic = OrderedDict([('date_begen', date_begin),
+                                ('date_end', date_end),
+                                ('rr_tot', rr_tot),
+                                ('rr_week', rr_week),
+                                ('rr_month', rr_month),
+                                ('rr_year', rr_year),
+                                ('final_value', final_value),
+                                ('min_value', min_value),
+                                ('CAGR', CAGR),
+                                ('ann_vol', ann_vol),
+                                ('down_side_vol', down_side_vol),
+                                ('mdd', mdd_size),
+                                ('sharpe_ratio', sharpe_ratio),
+                                ('sortino_ratio', sortino_ratio),
+                                ('calmar_ratio', calmar_ratio),
+                                ('profit_loss_ratio', profit_loss_ratio),  # 盈亏比
+                                ('win_ratio', '%.2f' % win_ratio),  # 胜率
+                                ('mdd_max_period', mdd_max_period),  # 最长不创新高周期数
+                                ('freq', freq_str),  # 周期类型
+                                ('max_ret', max_ret),  # 统计周期最大收益
+                                ('min_ret', min_ret),  # 统计周期最大亏损
+                                ('max_rr_month', max_rr_month),  # 最大月收益
+                                ('min_rr_month', min_rr_month),  # 最大月亏损
+                                ])
+        stat_dic_dic[col_name if suffix_name is None else col_name + "_" + suffix_name] = stat_dic
+
+    return stat_dic_dic
 
 
 def return_risk_analysis(nav_df: pd.DataFrame, date_frm=None, date_to=None, freq='weekly', rf=0.02, suffix_name=None):
@@ -699,11 +1007,13 @@ class DataFrame(pd.DataFrame):
 
 def reduce_list(funx, data_list, initial=None):
     result_list = []
+
     def reduce_func(x, y):
         # print(x,y)
         result = funx(x, y)
         result_list.append(result)
         return result
+
     if initial is None:
         reduce(reduce_func, data_list)
     else:
@@ -740,7 +1050,8 @@ def drawback_analysis(data_df, keep_max=False):
     if data_df is None or data_df.shape[0] <= 1:
         mdd_df = None
     else:
-        mdd_df = data_df.apply(lambda xx: [rr[1] for rr in reduce_list(_calc_mdd_4_drawback_analysis, xx, (xx.iloc[0], 0, keep_max))])
+        mdd_df = data_df.apply(
+            lambda xx: [rr[1] for rr in reduce_list(_calc_mdd_4_drawback_analysis, xx, (xx.iloc[0], 0, keep_max))])
     return mdd_df
 
 
@@ -909,33 +1220,33 @@ def merge_nav_from_file(file_list, date_from=None):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s: %(levelname)s [%(name)s] %(message)s')
-    from pandas.io.formats.excel import ExcelCell
-    # 基金绩效分析
-    file_path = r'd:\WSPych\fof_ams\Stage\periodic_task\analysis_cache\2016-6-1_2018-6-1\各策略指数走势_按机构.csv'
-    file_path_no_extention, _ = os.path.splitext(file_path)
-    stat_df, sheet_mdd_df_dic, sheet_mon_rr_dic = return_risk_analysis_by_xls(file_path, encoding='GBK')  # , date_col="日期", nav_col_list=['产品净值']
-    if stat_df is not None:
-        stat_df.to_csv('%s_绩效统计.csv' % file_path_no_extention, encoding='GBK')
-    for sheet_name, mdd_df in sheet_mdd_df_dic.items():
-        mdd_df.to_csv('%s_%s_最大回撤.csv' % (file_path_no_extention, sheet_name), encoding='GBK')
-    if len(sheet_mon_rr_dic) > 0:
-        xls_file_path = '%s_%s_月度收益.xls' % (file_path_no_extention, sheet_name)
-        writer = pd.ExcelWriter(xls_file_path)
-        try:
-            for sheet_name, mon_rr_dic in sheet_mon_rr_dic.items():
-                start_row = 1
-                for name, monthly_rr_df in mon_rr_dic.items():
-                    year_set = {trade_date.year for trade_date in monthly_rr_df.index}
-                    monthly_rr_matrix_df = pd.DataFrame(index=year_set, columns=range(1, 13))
-                    for trade_date, rr_s in monthly_rr_df.T.items():
-                        monthly_rr_matrix_df.loc[trade_date.year, trade_date.month] = '%2.2f%%' % (rr_s[0] * 100)
-                    # 写 excel
-                    # sheet.write(start_row, 0, name)
-                    writer.write_cells([ExcelCell(0, 0, name)], sheet_name, startrow=start_row - 1)
-                    monthly_rr_matrix_df.to_excel(writer, sheet_name, startrow=start_row)
-                    start_row += len(year_set) + 3
-        finally:
-            writer.close()
+    # # 基金绩效分析
+    # from pandas.io.formats.excel import ExcelCell
+    # file_path = r'd:\WSPych\fof_ams\Stage\periodic_task\analysis_cache\2016-6-1_2018-6-1\各策略指数走势_按机构.csv'
+    # file_path_no_extention, _ = os.path.splitext(file_path)
+    # stat_df, sheet_mdd_df_dic, sheet_mon_rr_dic = return_risk_analysis_by_xls(file_path, encoding='GBK')  # , date_col="日期", nav_col_list=['产品净值']
+    # if stat_df is not None:
+    #     stat_df.to_csv('%s_绩效统计.csv' % file_path_no_extention, encoding='GBK')
+    # for sheet_name, mdd_df in sheet_mdd_df_dic.items():
+    #     mdd_df.to_csv('%s_%s_最大回撤.csv' % (file_path_no_extention, sheet_name), encoding='GBK')
+    # if len(sheet_mon_rr_dic) > 0:
+    #     xls_file_path = '%s_%s_月度收益.xls' % (file_path_no_extention, sheet_name)
+    #     writer = pd.ExcelWriter(xls_file_path)
+    #     try:
+    #         for sheet_name, mon_rr_dic in sheet_mon_rr_dic.items():
+    #             start_row = 1
+    #             for name, monthly_rr_df in mon_rr_dic.items():
+    #                 year_set = {trade_date.year for trade_date in monthly_rr_df.index}
+    #                 monthly_rr_matrix_df = pd.DataFrame(index=year_set, columns=range(1, 13))
+    #                 for trade_date, rr_s in monthly_rr_df.T.items():
+    #                     monthly_rr_matrix_df.loc[trade_date.year, trade_date.month] = '%2.2f%%' % (rr_s[0] * 100)
+    #                 # 写 excel
+    #                 # sheet.write(start_row, 0, name)
+    #                 writer.write_cells([ExcelCell(0, 0, name)], sheet_name, startrow=start_row - 1)
+    #                 monthly_rr_matrix_df.to_excel(writer, sheet_name, startrow=start_row)
+    #                 start_row += len(year_set) + 3
+    #     finally:
+    #         writer.close()
 
     # 基金净值合并
     # file_list = [
@@ -955,12 +1266,12 @@ if __name__ == "__main__":
     #      'date_colum_name': '日期', 'nav_colum_name_list': ['诚盛1期净值']},
     # ]
 
-    file_list = [
-        {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\合晟\合晟产品历史净值.csv"},
-        {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\展弘\展弘投放产品历史净值.xlsx"},
-        {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\新萌\新萌合并业绩后净值.xlsx"},
-        {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\思勰\思勰合并后净值 2018 - 03 - 09.xls"},
-    ]
+    # file_list = [
+    #     {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\合晟\合晟产品历史净值.csv"},
+    #     {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\展弘\展弘投放产品历史净值.xlsx"},
+    #     {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\新萌\新萌合并业绩后净值.xlsx"},
+    #     {'file_path': r"d:\Works\F复华投资\L路演、访谈、评估报告\思勰\思勰合并后净值 2018 - 03 - 09.xls"},
+    # ]
     #
     # file_list = [
     #     {'file_path': r'd:\Works\F复华投资\L路演、访谈、评估报告\思勰\思瑞二号周净值.xlsx',
@@ -987,3 +1298,35 @@ if __name__ == "__main__":
     #     stat_df.to_excel(writer, sheet_name="绩效统计")
     #     writer.save()
     # logging.info("输出文件：\n%s", file_path)
+
+    # 测试 chuck 函数
+    # a_list = list(range(1, 17))
+    # for b_list in split_chunk(a_list, 4):
+    #     print(b_list)
+    # for b_list in split_chunk(a_list, 5):
+    #     print(b_list)
+    # for b_list in split_chunk(a_list, 16):
+    #     print(b_list)
+    # for b_list in split_chunk(a_list, 17):
+    #     print(b_list)
+
+    # 测试 log_param_when_exception 函数
+    # @log_param_when_exception
+    # def foo(a, b, c=None, *args, **kwargs):
+    #     raise Exception('some error')
+    #
+    # foo(1, 2, 3, 4, e=5, f=6)
+
+    # 测试 try_n_times
+    @try_n_times(exception_exclusion_set={ValueError}, logger=logger)
+    def foo(n):
+        if n == 2:
+            raise KeyError("key could't be %d" % n)
+        elif n == 3:
+            raise ValueError("value could't be %d" % n)
+        else:
+            return n
+
+    for n in range(5):
+        logger.debug('invoke n=%d', n)
+        foo(n)

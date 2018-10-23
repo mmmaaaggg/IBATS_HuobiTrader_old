@@ -42,9 +42,10 @@ class MdAgentPub(MdAgentBase):
             return ret_data
 
         if self.md_period == PeriodType.Tick:
-            sql_str = """SELECT * FROM md_tick
-                        WHERE InstrumentID IN (%s) %s
-                        ORDER BY ActionDay DESC, ActionTime DESC, ActionMillisec DESC %s"""
+            # sql_str = """SELECT * FROM md_tick
+            #             WHERE InstrumentID IN (%s) %s
+            #             ORDER BY ActionDay DESC, ActionTime DESC, ActionMillisec DESC %s"""
+            raise ValueError("暂不支持 tick 级回测")
         elif self.md_period == PeriodType.Min1:
             # 将sql 语句形势改成由 sqlalchemy 进行sql 拼装方式
             # sql_str = """select * from md_min_1
