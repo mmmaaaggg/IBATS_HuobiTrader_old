@@ -249,7 +249,7 @@ class ReadFileStg(StgBase):
                     continue
 
                 symbol = self.get_symbol_by_currency(currency)
-                if symbol_list is not None and symbol not in symbol_list:
+                if self.symbol_list is not None and symbol not in self.symbol_list:
                     self.logger.warning('%s 持仓： %.6f 不在当前订阅列表中，也不在目标持仓中，该持仓将不会被操作',
                                         symbol, tot_balance)
                     continue
