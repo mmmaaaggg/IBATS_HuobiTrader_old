@@ -23,10 +23,14 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta, date
 from abat.strategy import StgBase, StgHandlerBase
-from abat.utils.fh_utils import str_2_date
+from abat.utils.fh_utils import str_2_date, get_folder_path
 from config import Config
 from abat.common import PeriodType, RunMode, BacktestTradeMode, Direction, PositionDateType
 from collections import defaultdict
+from backend import engine_md
+from backend.orm import SymbolPair
+from abat.utils.db_utils import with_db_session, get_db_session
+from sqlalchemy import func
 import os
 import json
 # 下面代码是必要的引用
@@ -85,7 +89,7 @@ class TargetPosition:
 
 
 class ReadFileStg(StgBase):
-    _folder_path = os.path.abspath(os.path.join(os.path.curdir, r'file_order'))
+    _folder_path = get_folder_path(r'file_order')
 
     def __init__(self, symbol_list=None):
         super().__init__()
@@ -106,6 +110,11 @@ class ReadFileStg(StgBase):
         self.symbol_latest_price_dic = defaultdict(float)
         self.weight = 1 if not DEBUG else 0.2  # 默认仓位权重
         self.stop_loss_rate = -0.03
+        # 初始化 symbol 基本信息
+        with with_db_session(engine_md) as session:
+            symbol_info_list = session.query(SymbolPair).filter(
+                func.concat(SymbolPair.base_currency, SymbolPair.quote_currency).in_(symbol_list)).all()
+            self.symbol_info_dic = {symbol.base_currency+symbol.quote_currency: symbol for symbol in symbol_info_list}
         self.logger.info('接受订单文件目录：%s', self._folder_path)
         self.load_feedback_file()
 
@@ -217,13 +226,13 @@ class ReadFileStg(StgBase):
             position_df, file_path_list = self.fetch_pos_by_file()
             if position_df is None or position_df.shape[0] == 0:
                 return
+            if len(self.symbol_latest_price_dic) == 0:
+                self.logger.warning('当前程序没有缓存到有效的最新价格数据，交易指令暂缓执行')
+                return
             # 如果存在新的 order 指令，则将所有的 feedback 文件备份（根据新的order进行下单，生成新的feedback文件）
             self.backup_feedback_files()
             self.logger.debug('仓位调整目标：\n%s', position_df)
             target_holding_dic = position_df.set_index('currency').dropna().to_dict('index')
-            if len(self.symbol_latest_price_dic) == 0:
-                self.logger.warning('当前程序没有缓存到有效的最新价格数据，交易指令暂缓执行')
-                return
 
             # {currency: (Direction, currency, target_position, symbol, target_price, stop_loss_price)
             symbol_target_position_dic = {}
@@ -255,7 +264,8 @@ class ReadFileStg(StgBase):
                     continue
                 self.logger.info('计划卖出 %s', symbol)
                 # TODO: 最小下单量在数据库中有对应信息，有待改进
-                gap_threshold_vol = 0.1
+                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(
+                    symbol, 0, gap_threshold_precision=None)
                 symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, 0, symbol,
                                                                     gap_threshold_vol=gap_threshold_vol)
                 is_all_fit_target = False
@@ -482,8 +492,9 @@ class ReadFileStg(StgBase):
                         self.do_order(md_dic, symbol, position_gap, target_position.price,
                                       target_position.direction, target_position.stop_loss_price, msg=msg)
                     else:
-                        self.logger.debug('当前 %s 持仓 %f -> %f 差距 %f 过小，忽略此调整',
-                                          target_currency, position_holding, target_position.position, position_gap)
+                        self.logger.debug('当前 %s 持仓 %f -> %f 差距 %f 小于最小调整范围 %f，忽略此调整',
+                                          target_currency, position_holding, target_position.position, position_gap,
+                                          target_position.gap_threshold_vol)
 
         # 更新最近执行时间
         self.symbol_last_deal_datetime[symbol] = datetime.now()
@@ -492,20 +503,23 @@ class ReadFileStg(StgBase):
         """目前暂时仅支持currency 与 usdt 之间转换"""
         return currency + 'usdt'
 
-    def calc_vol_and_stop_loss_price(self, symbol, weight, stop_loss_rate=None, gap_threshold_precision=0.01):
+    def calc_vol_and_stop_loss_price(self, symbol, weight, stop_loss_rate=None, gap_threshold_precision: (int, None)=2):
         """
         根据权重及当前账号总市值，计算当前 symbol 对应多少 vol, 根据 stop_loss_rate 计算止损价格(目前仅考虑做多的情况)
         :param symbol:
         :param weight:
         :param stop_loss_rate:
-        :param gap_threshold_precision:
+        :param gap_threshold_precision: 为了避免反复调整，造成手续费摊高，设置最小调整精度, None 则使用当前Symbol默认值
         :return:
         """
+        if gap_threshold_precision is None:
+            gap_threshold_precision = self.symbol_info_dic[symbol].amount_precision
         holding_currency_dic = self.get_holding_currency(exclude_usdt=False)
         # tot_value = sum([dic['balance'] * self.symbol_latest_price_dic[self.get_symbol_by_currency(currency)]
         #                  for currency, dic in holding_currency_dic.items()])
         if symbol not in self.symbol_latest_price_dic or self.symbol_latest_price_dic[symbol] == 0:
             self.logger.error('%s 没有找到有效的最新价格', symbol)
+            price_latest = None
             weight_vol = None
             gap_threshold_vol = None
             stop_loss_price = None
@@ -521,9 +535,16 @@ class ReadFileStg(StgBase):
 
             price_latest = self.symbol_latest_price_dic[symbol]
             weight_vol = tot_value * weight / price_latest
-            gap_threshold_vol = tot_value * gap_threshold_precision / price_latest
+            gap_threshold_vol = tot_value * (0.1 ** gap_threshold_precision) / price_latest
             stop_loss_price = price_latest * (1 + stop_loss_rate)
 
+        self.logger.debug('%s price_latest=%.4f, weight_vol=%f, gap_threshold_vol=%.4f, stop_loss_price=%.4f',
+                          symbol,
+                          0 if price_latest is None else price_latest,
+                          0 if weight_vol is None else weight_vol,
+                          0 if gap_threshold_vol is None else gap_threshold_vol,
+                          0 if stop_loss_price is None else stop_loss_price,
+                          )
         return weight_vol, gap_threshold_vol, stop_loss_price
 
     def get_target_position(self, symbol):
