@@ -47,16 +47,18 @@ PATTERN_FEEDBACK_FILE_NAME = re.compile(r'^feedback.*\.json$')
 
 class TargetPosition:
 
-    def __init__(self, direction: Direction, currency, position, symbol,
-                 price=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=0.01):
+    def __init__(self, direction: Direction, currency, symbol, weight=None, position=None, price=None,
+                 stop_loss_rate=None, stop_loss_price=None, has_stop_loss=False, gap_threshold_vol=0.01):
         self.direction = direction
         self.currency = currency
         self.position = position
         self.symbol = symbol
         self.price = price
+        self.stop_loss_rate = stop_loss_rate
         self.stop_loss_price = stop_loss_price
         self.has_stop_loss = has_stop_loss
         self.gap_threshold_vol = gap_threshold_vol
+        self.weight = weight
 
     def check_stop_loss(self, close):
         """
@@ -83,7 +85,7 @@ class TargetPosition:
                 if attr.find('_') != 0 and not callable(getattr(self, attr))}
 
     def __repr__(self):
-        return f'<TargetPosition(symbol={self.symbol}, direction={int(self.direction)}, ' \
+        return f'<TargetPosition(symbol={self.symbol}, direction={int(self.direction)}, weight={self.weight},' \
                f'position={self.position}, price={self.price}, stop_loss_price={self.stop_loss_price}, ' \
                f'has_stop_loss={self.has_stop_loss}, gap_threshold_vol={self.gap_threshold_vol})>'
 
@@ -264,10 +266,12 @@ class ReadFileStg(StgBase):
                     continue
                 self.logger.info('计划卖出 %s', symbol)
                 # TODO: 最小下单量在数据库中有对应信息，有待改进
+                weight = 0
                 target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(
-                    symbol, 0, gap_threshold_precision=None)
-                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, 0, symbol,
-                                                                    gap_threshold_vol=gap_threshold_vol)
+                    symbol, weight, gap_threshold_precision=None)
+                symbol_target_position_dic[symbol] = TargetPosition(
+                    Direction.Long, currency, symbol,
+                    weight=weight, position=0, gap_threshold_vol=gap_threshold_vol)
                 is_all_fit_target = False
 
             # 生成目标持仓列表买入指令
@@ -276,8 +280,8 @@ class ReadFileStg(StgBase):
                 stop_loss_rate = position_dic['stop_loss_rate']
                 # stop_loss_price = position_dic['stop_loss_rate']
                 symbol = self.get_symbol_by_currency(currency)
-                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(symbol, weight,
-                                                                                                   stop_loss_rate)
+                target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(
+                    symbol, weight, stop_loss_rate)
                 if target_vol is None:
                     self.logger.warning('%s 持仓权重 %.2f %% 无法计算目标持仓量', currency, weight * 100)
                     continue
@@ -297,9 +301,10 @@ class ReadFileStg(StgBase):
 
                 # 多头目标持仓
                 self.logger.info('计划买入 %s 目标仓位：%f 止损价：%f', symbol, target_vol, stop_loss_price)
-                symbol_target_position_dic[symbol] = TargetPosition(Direction.Long, currency, target_vol, symbol,
-                                                                    None, stop_loss_price,
-                                                                    gap_threshold_vol=gap_threshold_vol)
+                symbol_target_position_dic[symbol] = TargetPosition(
+                    Direction.Long, currency, symbol,
+                    weight=weight, position=target_vol, price=None,
+                    stop_loss_rate=stop_loss_rate, stop_loss_price=stop_loss_price, gap_threshold_vol=gap_threshold_vol)
 
             symbol_target_position_dic_len = len(symbol_target_position_dic)
             if symbol_target_position_dic_len > 0:
@@ -398,6 +403,14 @@ class ReadFileStg(StgBase):
             return
 
         target_position = self.symbol_target_position_dic[symbol]
+        # 权重为空，或者清仓的情况下，无需重新计算仓位
+        if target_position.weight is not None and not(target_position.weight == 0 and target_position.position == 0):
+            # target_position 为交易指令生产是产生的止损价格，无需浮动，否则永远无法止损了
+            target_vol, gap_threshold_vol, stop_loss_price = self.calc_vol_and_stop_loss_price(
+                symbol, target_position.weight, target_position.stop_loss_rate)
+            target_position.position = target_vol
+            target_position.gap_threshold_vol = gap_threshold_vol
+
         # target_currency = self.trade_agent.get_currency(symbol)
         target_currency = target_position.currency
         # self.logger.debug('target_position_dic[%s]: %s', symbol, self.target_position_dic[symbol])
@@ -508,7 +521,7 @@ class ReadFileStg(StgBase):
         根据权重及当前账号总市值，计算当前 symbol 对应多少 vol, 根据 stop_loss_rate 计算止损价格(目前仅考虑做多的情况)
         :param symbol:
         :param weight:
-        :param stop_loss_rate:
+        :param stop_loss_rate: 为空则不计算
         :param gap_threshold_precision: 为了避免反复调整，造成手续费摊高，设置最小调整精度, None 则使用当前Symbol默认值
         :return:
         """
@@ -535,13 +548,16 @@ class ReadFileStg(StgBase):
 
             price_latest = self.symbol_latest_price_dic[symbol]
             weight_vol = tot_value * weight / price_latest
-            gap_threshold_vol = tot_value * (0.1 ** gap_threshold_precision) / price_latest
-            stop_loss_price = price_latest * (1 + stop_loss_rate)
+            gap_threshold_vol = None if gap_threshold_precision is None else \
+                tot_value * (0.1 ** gap_threshold_precision) / price_latest
+            stop_loss_price = None if stop_loss_rate is None else \
+                price_latest * (1 + stop_loss_rate)
 
-        self.logger.debug('%s price_latest=%.4f, weight_vol=%f, gap_threshold_vol=%.4f, stop_loss_price=%.4f',
+        self.logger.debug('%s price_latest=%.4f, weight_vol=%f [%.1f%%], gap_threshold_vol=%.4f, stop_loss_price=%.4f',
                           symbol,
                           0 if price_latest is None else price_latest,
                           0 if weight_vol is None else weight_vol,
+                          0 if weight is None else (weight * 100),
                           0 if gap_threshold_vol is None else gap_threshold_vol,
                           0 if stop_loss_price is None else stop_loss_price,
                           )
